@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "user": {
+      "title": "User",
+      "description": "Perfil de usuario dentro de Contabilid-App",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "ID único del usuario de Firebase Auth" },
+        "email": { "type": "string", "format": "email", "description": "Correo electrónico del usuario" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de registro" }
+      },
+      "required": ["uid", "email"]
+    },
+    "cuenta": {
+      "title": "Cuenta",
+      "description": "Cuenta bancaria, efectivo o tarjeta de crédito/deuda",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string", "description": "Nombre de la cuenta (ej. Efectivo, Banco)" },
+        "tipo": { "type": "string", "enum": ["credito", "deuda"], "description": "Tipo de cuenta" },
+        "saldo": { "type": "number", "description": "Saldo actual" },
+        "fechaCreacion": { "type": "string", "format": "date-time", "description": "Fecha de creación" }
+      },
+      "required": ["nombre", "tipo", "saldo"]
+    },
+    "categoria": {
+      "title": "Categoría",
+      "description": "Categoría para clasificar ingresos y gastos",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string", "description": "Nombre de la categoría (ej. Alimentos, Sueldo)" },
+        "tipo": { "type": "string", "enum": ["ingreso", "egreso", "ambos"], "description": "Tipo de categoría" },
+        "fechaCreacion": { "type": "string", "format": "date-time", "description": "Fecha de creación" }
+      },
+      "required": ["nombre", "tipo"]
+    },
+    "movimiento": {
+      "title": "Movimiento",
+      "description": "Registro de un movimiento financiero (ingreso, egreso o pago de deuda)",
+      "type": "object",
+      "properties": {
+        "monto": { "type": "number", "description": "Monto del movimiento" },
+        "tipo": { "type": "string", "enum": ["ingreso", "egreso", "pago_deuda"], "description": "Tipo de movimiento" },
+        "categoria": { "type": "string", "description": "Nombre de la categoría" },
+        "descripcion": { "type": "string", "description": "Descripción o detalle" },
+        "fecha": { "type": "string", "description": "Fecha del movimiento en formato YYYY-MM-DD" },
+        "cuentaOrigenId": { "type": "string", "description": "ID de la cuenta de origen" },
+        "cuentaDestinoDeudaId": { "type": "string", "description": "ID de la cuenta de deuda (opcional)" },
+        "fechaCreacion": { "type": "string", "format": "date-time", "description": "Fecha de registro" }
+      },
+      "required": ["monto", "tipo", "categoria", "fecha"]
+    }
+  },
+  "firestore": {
+    "/usuarios/{userId}": {
+      "schema": "user",
+      "description": "Colección de perfiles de usuario"
+    },
+    "/usuarios/{userId}/cuentas/{cuentaId}": {
+      "schema": "cuenta",
+      "description": "Cuentas del usuario"
+    },
+    "/usuarios/{userId}/categorias/{categoriaId}": {
+      "schema": "categoria",
+      "description": "Categorías personalizadas del usuario"
+    },
+    "/usuarios/{userId}/movimientos/{movimientoId}": {
+      "schema": "movimiento",
+      "description": "Movimientos financieros del usuario"
+    }
+  }
+}
