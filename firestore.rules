@@ -2,27 +2,23 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Default-deny catch-all for anything outside of /usuarios
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Allow full access to authenticated users to their own data only
+    // Permitir acceso completo al documento del usuario
     match /usuarios/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
-
-      match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
-      }
     }
 
-    // Keep legacy fallback for compatibility
+    // Permitir acceso completo a cualquier subcolección y documento dentro del usuario
+    match /usuarios/{userId}/{collectionId}/{documentId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Compatibilidad para la colección /users si se requiere
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
-      
-      match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
-      }
+    }
+
+    match /users/{userId}/{collectionId}/{documentId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }

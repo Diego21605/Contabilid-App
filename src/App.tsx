@@ -41,9 +41,13 @@ import {
   Building2,
   Tv,
   PieChart,
-  Settings
+  Settings,
+  Menu,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { toast, Toaster } from 'react-hot-toast';
+import appLogo from './assets/images/app_logo_1782999126227.jpg';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
@@ -63,9 +67,23 @@ import {
   orderBy,
   getDocFromServer,
   updateDoc,
-  setDoc
+  setDoc,
+  where,
+  getDocs,
+  getDocsFromServer
 } from 'firebase/firestore';
 import { auth, db, OperationType, handleFirestoreError } from './firebase';
+import { 
+  deriveKeyFromPassword, 
+  deriveKeyFromGoogleUid, 
+  exportKeyToBase64, 
+  importKeyFromBase64, 
+  encryptDoc, 
+  decryptDoc, 
+  secureAddDoc, 
+  secureSetDoc, 
+  secureUpdateDoc 
+} from './security';
 import { Chart as ChartJS, registerables } from 'chart.js';
 
 ChartJS.register(...registerables);
@@ -230,9 +248,33 @@ export const getCategoryDetails = (category: string) => {
   return { emoji: '📦', name: category, color: 'from-slate-400 to-slate-600', textCol: 'text-slate-400', bgCol: 'bg-slate-500/10 border-slate-500/20' };
 };
 
+// Formatea un número o string con separador de miles (estilo es-CO)
+const formatNumberMask = (value: string | number | undefined | null): string => {
+  if (value === undefined || value === null) return '';
+  const clean = String(value).replace(/\D/g, '');
+  if (!clean) return '';
+  return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(parseFloat(clean));
+};
+
+// Convierte un string formateado con máscara de vuelta a un número limpio
+const parseNumberMask = (value: string | number | undefined | null): number => {
+  if (value === undefined || value === null) return 0;
+  const clean = String(value).replace(/\D/g, '');
+  const parsed = parseFloat(clean);
+  return isNaN(parsed) ? 0 : parsed;
+};
+
 export default function App() {
   // Módulos del Sidebar
   const [activeModule, setActiveModule] = useState<'dashboard' | 'cuentas' | 'consultas' | 'usuario' | 'categorias' | 'presupuestos' | 'ahorros' | 'deudas' | 'suscripciones' | 'estadisticas' | 'reportes'>('dashboard');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(true);
+  
+  const handleSelectModule = (moduleName: 'dashboard' | 'cuentas' | 'consultas' | 'usuario' | 'categorias' | 'presupuestos' | 'ahorros' | 'deudas' | 'suscripciones' | 'estadisticas' | 'reportes') => {
+    setActiveModule(moduleName);
+    setIsMobileMenuOpen(false);
+  };
+
   const [activeTab, setActiveTab] = useState<'demo' | 'angular'>('demo'); // Mantener para compatibilidad interna de código
 
   // Suscripciones en base de datos
@@ -348,6 +390,12 @@ export default function App() {
 
   // Campos para creación de cuenta
   const [showNewAccountModal, setShowNewAccountModal] = useState(false);
+  const [isAddSubModalOpen, setIsAddSubModalOpen] = useState(false);
+  const [isAddCategoryModalOpen, setIsAddCategoryModalOpen] = useState(false);
+  const [isAddBudgetModalOpen, setIsAddBudgetModalOpen] = useState(false);
+  const [isAddGoalModalOpen, setIsAddGoalModalOpen] = useState(false);
+  const [isAddDebtModalOpen, setIsAddDebtModalOpen] = useState(false);
+  const [showAddAccountTxModal, setShowAddAccountTxModal] = useState(false);
   const [newAccountName, setNewAccountName] = useState('');
   const [newAccountType, setNewAccountType] = useState<'credito' | 'deuda'>('credito');
   const [newAccountSubtipo, setNewAccountSubtipo] = useState<'disponible' | 'ahorros' | 'deudas'>('disponible');
@@ -377,6 +425,8 @@ export default function App() {
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
   const [accounts, setAccounts] = useState<any[]>([]);
+  const [loginLogoError, setLoginLogoError] = useState(false);
+  const [sidebarLogoError, setSidebarLogoError] = useState(false);
 
   // Estado de Autenticación
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -590,6 +640,28 @@ export default function App() {
       if (doughnutChartRef.current) doughnutChartRef.current.destroy();
     };
   }, [activeModule, transactions, currentUser]);
+
+  // Cerrar el menú con la tecla Esc y bloquear el scroll del body
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsMobileMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (isMobileMenuOpen) {
+      document.body.classList.add('overflow-hidden');
+    } else {
+      document.body.classList.remove('overflow-hidden');
+    }
+    return () => {
+      document.body.classList.remove('overflow-hidden');
+    };
+  }, [isMobileMenuOpen]);
 
   // Validar conexión a Firestore al iniciar la aplicación (Requisito de la guía de Firebase)
   useEffect(() => {
@@ -1021,13 +1093,17 @@ export default function App() {
     try {
       if (authMode === 'register') {
         await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-        setAuthSuccess('¡Cuenta registrada exitosamente!');
+        const successMsg = '¡Cuenta registrada exitosamente!';
+        setAuthSuccess(successMsg);
+        toast.success(successMsg);
         // Crear documento del usuario inicial en Firestore
         // No es estrictamente necesario ya que las colecciones se crean dinámicamente,
         // pero valida permisos.
       } else {
         await signInWithEmailAndPassword(auth, authEmail, authPassword);
-        setAuthSuccess('Sesión iniciada con éxito.');
+        const successMsg = 'Sesión iniciada con éxito.';
+        setAuthSuccess(successMsg);
+        toast.success(successMsg);
       }
     } catch (err: any) {
       console.error(err);
@@ -1040,8 +1116,11 @@ export default function App() {
         localizedError = 'El formato del correo es inválido.';
       } else if (err.code === 'auth/invalid-credential') {
         localizedError = 'Credenciales incorrectas. Verifique su correo y contraseña.';
+      } else if (err.code === 'auth/operation-not-allowed') {
+        localizedError = 'El proveedor de Correo/Contraseña no está habilitado en Firebase. Habilítalo en: Firebase Console > Authentication > Sign-in method.';
       }
       setAuthError(localizedError);
+      toast.error(localizedError, { duration: 8000 });
     } finally {
       setAuthLoading(false);
     }
@@ -1100,6 +1179,7 @@ export default function App() {
       // Cambiar a un emoji divertido para la siguiente creación
       const emojis = ['🍕', '🍿', '🎸', '🎮', '💡', '🏋️', '📚', '👗', '🎨', '🚕', '🏥', '🥕', '🥩', '🍩', '🥑', '🍿', '🧁', '🍦', '🍩', '🍹', '✈️', '🏝️', '🏕️', '🏡', '💻'];
       setNewCatEmoji(emojis[Math.floor(Math.random() * emojis.length)]);
+      setIsAddCategoryModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/categorias`);
     } finally {
@@ -1165,13 +1245,13 @@ export default function App() {
   const handleRegisterOcrMovement = async (accountId: string) => {
     if (!currentUser || !ocrResult) return;
     if (!accountId) {
-      alert("Por favor selecciona una cuenta para registrar el gasto.");
+      toast.error("Por favor selecciona una cuenta para registrar el gasto.");
       return;
     }
 
     const targetAccount = accounts.find(a => a.id === accountId);
     if (!targetAccount) {
-      alert("La cuenta seleccionada no existe.");
+      toast.error("La cuenta seleccionada no existe.");
       return;
     }
 
@@ -1202,7 +1282,7 @@ export default function App() {
       const accRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', accountId);
       await updateDoc(accRef, { saldo: nuevoSaldo });
 
-      alert(`Gasto de $${ocrResult.value.toLocaleString('es-CO')} registrado exitosamente en la cuenta ${targetAccount.nombre}.`);
+      toast.success(`Gasto de $${ocrResult.value.toLocaleString('es-CO')} registrado exitosamente en la cuenta ${targetAccount.nombre}.`);
       
       // Limpiar estados de OCR
       setOcrFile(null);
@@ -1234,8 +1314,8 @@ export default function App() {
     if (!currentUser) return;
     if (!newBudgetCategory || !newBudgetLimit.trim()) return;
 
-    const limitNum = parseFloat(newBudgetLimit);
-    if (isNaN(limitNum) || limitNum <= 0) return;
+    const limitNum = parseNumberMask(newBudgetLimit);
+    if (limitNum <= 0) return;
 
     setNewBudgetLoading(true);
     try {
@@ -1249,6 +1329,7 @@ export default function App() {
       setNewBudgetCategory('');
       setNewBudgetLimit('');
       setNewBudgetAlertThreshold('95');
+      setIsAddBudgetModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/presupuestos`);
     } finally {
@@ -1273,11 +1354,11 @@ export default function App() {
     if (!currentUser) return;
     if (!newGoalName.trim() || !newGoalTarget.trim()) return;
 
-    const targetNum = parseFloat(newGoalTarget);
-    const savedNum = parseFloat(newGoalSaved) || 0;
+    const targetNum = parseNumberMask(newGoalTarget);
+    const savedNum = parseNumberMask(newGoalSaved);
 
-    if (isNaN(targetNum) || targetNum <= 0) return;
-    if (isNaN(savedNum) || savedNum < 0) return;
+    if (targetNum <= 0) return;
+    if (savedNum < 0) return;
 
     setNewGoalLoading(true);
     try {
@@ -1293,6 +1374,7 @@ export default function App() {
       setNewGoalTarget('');
       setNewGoalSaved('');
       setNewGoalEmoji('💰');
+      setIsAddGoalModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/metas`);
     } finally {
@@ -1303,8 +1385,8 @@ export default function App() {
   // Actualizar ahorro acumulado de una meta
   const handleUpdateSavingsGoalSaved = async (goalId: string, savedAmountStr: string) => {
     if (!currentUser) return;
-    const savedNum = parseFloat(savedAmountStr);
-    if (isNaN(savedNum) || savedNum < 0) return;
+    const savedNum = parseNumberMask(savedAmountStr);
+    if (savedNum < 0) return;
 
     setEditingGoalLoading(true);
     try {
@@ -1368,43 +1450,131 @@ export default function App() {
     }
   };
 
+  // Sincronizar saldo de cuenta con la deuda asociada
+  const syncAccountDebtBalance = async (uid: string, accountId: string, newBalance: number) => {
+    try {
+      const debtsRef = collection(db, 'usuarios', uid, 'deudas');
+      const q = query(debtsRef, where('accountId', '==', accountId));
+      const qSnap = await getDocsFromServer(q);
+      if (!qSnap.empty) {
+        for (const dDoc of qSnap.docs) {
+          await updateDoc(doc(db, 'usuarios', uid, 'deudas', dDoc.id), {
+            balance: newBalance
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Error al sincronizar saldo de cuenta a deudas:", e);
+    }
+  };
+
+  // Sincronizar saldo de deuda con la cuenta asociada
+  const syncDebtAccountBalance = async (uid: string, debtId: string, newBalance: number) => {
+    try {
+      const debtRef = doc(db, 'usuarios', uid, 'deudas', debtId);
+      const debtSnap = await getDocFromServer(debtRef);
+      if (debtSnap.exists()) {
+        const debtData = debtSnap.data();
+        if (debtData.accountId) {
+          await updateDoc(doc(db, 'usuarios', uid, 'cuentas', debtData.accountId), {
+            saldo: newBalance
+          });
+        } else {
+          const accountsRef = collection(db, 'usuarios', uid, 'cuentas');
+          const q = query(accountsRef, where('debtId', '==', debtId));
+          const qSnap = await getDocsFromServer(q);
+          if (!qSnap.empty) {
+            for (const aDoc of qSnap.docs) {
+              await updateDoc(doc(db, 'usuarios', uid, 'cuentas', aDoc.id), {
+                saldo: newBalance
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Error al sincronizar saldo de deuda a cuenta:", e);
+    }
+  };
+
   // Crear deudas en Firestore
   const handleCreateDebt = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
     if (!newDebtName.trim() || !newDebtBalance.trim() || !newDebtMinPayment.trim() || !newDebtDueDate.trim()) {
-      alert('Por favor complete todos los campos obligatorios.');
+      toast.error('Por favor complete todos los campos obligatorios.');
       return;
     }
 
-    const balanceNum = parseFloat(newDebtBalance);
-    const minPaymentNum = parseFloat(newDebtMinPayment);
+    const balanceNum = parseNumberMask(newDebtBalance);
+    const minPaymentNum = parseNumberMask(newDebtMinPayment);
 
-    if (isNaN(balanceNum) || balanceNum <= 0) {
-      alert('Por favor ingrese un saldo de deuda válido.');
+    if (balanceNum <= 0) {
+      toast.error('Por favor ingrese un saldo de deuda válido.');
       return;
     }
-    if (isNaN(minPaymentNum) || minPaymentNum <= 0) {
-      alert('Por favor ingrese un pago mínimo o cuota válido.');
+    if (minPaymentNum <= 0) {
+      toast.error('Por favor ingrese un pago mínimo o cuota válido.');
       return;
     }
 
     setNewDebtLoading(true);
     try {
+      // 1. Crear la cuenta financiera correspondiente de tipo 'deuda'
+      const accountsRef = collection(db, 'usuarios', currentUser.uid, 'cuentas');
+      const accountDocRef = await addDoc(accountsRef, {
+        nombre: newDebtName.trim(),
+        tipo: 'deuda',
+        subtipo: 'deudas',
+        saldo: balanceNum,
+        color: newDebtType === 'card' ? 'rose' : 'purple',
+        icono: newDebtType === 'card' ? 'credit-card' : 'landmark',
+        fechaCreacion: new Date().toISOString()
+      });
+
+      // 2. Crear la obligación de deuda en Firestore vinculada a la cuenta
       const debtsRef = collection(db, 'usuarios', currentUser.uid, 'deudas');
-      await addDoc(debtsRef, {
+      const debtDocRef = await addDoc(debtsRef, {
         name: newDebtName.trim(),
         balance: balanceNum,
         minPayment: minPaymentNum,
         dueDate: newDebtDueDate,
         type: newDebtType,
+        accountId: accountDocRef.id,
         fechaCreacion: new Date().toISOString()
       });
+
+      // 3. Vincular el ID de la deuda en la cuenta financiera
+      await updateDoc(doc(db, 'usuarios', currentUser.uid, 'cuentas', accountDocRef.id), {
+        debtId: debtDocRef.id
+      });
+
+      // Registrar una transacción de saldo inicial para la cuenta creada de forma transparente
+      if (balanceNum > 0) {
+        await addDoc(collection(db, 'usuarios', currentUser.uid, 'movimientos'), {
+          monto: balanceNum,
+          tipo: 'egreso',
+          categoria: 'Sueldo',
+          descripcion: `Saldo inicial (Deuda) - ${newDebtName.trim()}`,
+          fecha: new Date().toISOString().split('T')[0],
+          fechaCreacion: new Date().toISOString(),
+          accountId: accountDocRef.id,
+          cuentaId: accountDocRef.id,
+          amount: balanceNum,
+          type: 'expense',
+          category: 'Sueldo',
+          description: `Saldo inicial (Deuda) - ${newDebtName.trim()}`,
+          date: new Date().toISOString()
+        });
+      }
+
+      toast.success('Deuda y cuenta asociada creadas con éxito.');
       setNewDebtName('');
       setNewDebtBalance('');
       setNewDebtMinPayment('');
       setNewDebtDueDate('');
       setNewDebtType('card');
+      setIsAddDebtModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/deudas`);
     } finally {
@@ -1415,15 +1585,15 @@ export default function App() {
   // Actualizar datos de una deuda
   const handleUpdateDebt = async (debtId: string) => {
     if (!currentUser) return;
-    const balanceNum = parseFloat(editingDebtBalance);
-    const minPaymentNum = parseFloat(editingDebtMinPayment);
+    const balanceNum = parseNumberMask(editingDebtBalance);
+    const minPaymentNum = parseNumberMask(editingDebtMinPayment);
 
-    if (isNaN(balanceNum) || balanceNum < 0) {
-      alert('Por favor ingrese un saldo de deuda válido.');
+    if (balanceNum < 0) {
+      toast.error('Por favor ingrese un saldo de deuda válido.');
       return;
     }
-    if (isNaN(minPaymentNum) || minPaymentNum < 0) {
-      alert('Por favor ingrese un pago o cuota válido.');
+    if (minPaymentNum < 0) {
+      toast.error('Por favor ingrese un pago o cuota válido.');
       return;
     }
 
@@ -1435,6 +1605,12 @@ export default function App() {
         minPayment: minPaymentNum,
         dueDate: editingDebtDueDate
       });
+
+      // Sincronizar con la cuenta vinculada si existe
+      await syncDebtAccountBalance(currentUser.uid, debtId, balanceNum);
+
+      toast.success('Obligación de deuda actualizada correctamente.');
+
       setEditingDebtId(null);
       setEditingDebtBalance('');
       setEditingDebtMinPayment('');
@@ -1449,9 +1625,17 @@ export default function App() {
   // Eliminar deuda de Firestore
   const handleDeleteDebt = async (debtId: string) => {
     if (!currentUser) return;
-    if (!confirm('¿Estás seguro de que deseas eliminar esta deuda?')) return;
+    if (!confirm('¿Estás seguro de que deseas eliminar esta deudas? Se eliminará la cuenta bancaria vinculada para mantener la concordancia.')) return;
     try {
       const docRef = doc(db, 'usuarios', currentUser.uid, 'deudas', debtId);
+      const debtSnap = await getDocFromServer(docRef);
+      if (debtSnap.exists()) {
+        const debtData = debtSnap.data();
+        if (debtData.accountId) {
+          const accRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', debtData.accountId);
+          await deleteDoc(accRef);
+        }
+      }
       await deleteDoc(docRef);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `usuarios/${currentUser.uid}/deudas/${debtId}`);
@@ -1463,13 +1647,13 @@ export default function App() {
     e.preventDefault();
     if (!currentUser) return;
     if (!newSubName.trim() || !newSubCost.trim() || !newSubDueDate.trim()) {
-      alert('Por favor complete todos los campos obligatorios.');
+      toast.error('Por favor complete todos los campos obligatorios.');
       return;
     }
 
-    const costNum = parseFloat(newSubCost);
-    if (isNaN(costNum) || costNum <= 0) {
-      alert('Por favor ingrese un costo válido para la suscripción.');
+    const costNum = parseNumberMask(newSubCost);
+    if (costNum <= 0) {
+      toast.error('Por favor ingrese un costo válido para la suscripción.');
       return;
     }
 
@@ -1484,11 +1668,13 @@ export default function App() {
         status: newSubStatus,
         fechaCreacion: new Date().toISOString()
       });
+      toast.success('Suscripción registrada con éxito.');
       setNewSubName('');
       setNewSubCost('');
       setNewSubDueDate('');
       setNewSubAccount('');
       setNewSubStatus('active');
+      setIsAddSubModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/suscripciones`);
     } finally {
@@ -1499,10 +1685,10 @@ export default function App() {
   // Actualizar suscripción en Firestore
   const handleUpdateSubscription = async (subId: string) => {
     if (!currentUser) return;
-    const costNum = parseFloat(editingSubCost);
+    const costNum = parseNumberMask(editingSubCost);
 
-    if (isNaN(costNum) || costNum < 0) {
-      alert('Por favor ingrese un costo válido.');
+    if (costNum < 0) {
+      toast.error('Por favor ingrese un costo válido.');
       return;
     }
 
@@ -1514,6 +1700,7 @@ export default function App() {
         dueDate: editingSubDueDate,
         status: editingSubStatus
       });
+      toast.success('Suscripción actualizada correctamente.');
       setEditingSubId(null);
       setEditingSubCost('');
       setEditingSubDueDate('');
@@ -1531,6 +1718,7 @@ export default function App() {
     try {
       const docRef = doc(db, 'usuarios', currentUser.uid, 'suscripciones', subId);
       await deleteDoc(docRef);
+      toast.success('Suscripción eliminada con éxito.');
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `usuarios/${currentUser.uid}/suscripciones/${subId}`);
     }
@@ -1541,7 +1729,7 @@ export default function App() {
     e.preventDefault();
     if (!currentUser) return;
     if (!userProfileName.trim()) {
-      alert('El nombre de usuario no puede estar vacío.');
+      toast.error('El nombre de usuario no puede estar vacío.');
       return;
     }
 
@@ -1555,7 +1743,7 @@ export default function App() {
         theme: userProfileTheme,
         fechaActualizacion: new Date().toISOString()
       }, { merge: true });
-      alert('Perfil y preferencias guardadas exitosamente.');
+      toast.success('Perfil y preferencias guardadas exitosamente.');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/configuracion/preferencias`);
     } finally {
@@ -1593,14 +1781,14 @@ export default function App() {
   const handleAddTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-    if (!txAmount || isNaN(parseFloat(txAmount)) || parseFloat(txAmount) <= 0) {
-      alert('Por favor ingrese un monto válido.');
+    const parsedAmount = parseNumberMask(txAmount);
+    if (parsedAmount <= 0) {
+      toast.error('Por favor ingrese un monto válido.');
       return;
     }
 
     setTxLoading(true);
     try {
-      const parsedAmount = parseFloat(txAmount);
       
       // Encontrar la cuenta seleccionada o recurrir a la primera por defecto
       let targetAccountId = txAccountId;
@@ -1612,7 +1800,7 @@ export default function App() {
       }
 
       if (!targetAccount) {
-        alert('Debe crear al menos una cuenta para registrar transacciones.');
+        toast.error('Debe crear al menos una cuenta para registrar transacciones.');
         setTxLoading(false);
         return;
       }
@@ -1644,6 +1832,10 @@ export default function App() {
       const accRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', targetAccountId);
       await updateDoc(accRef, { saldo: nuevoSaldo });
 
+      // Sincronizar saldo de cuenta con la deuda asociada
+      await syncAccountDebtBalance(currentUser.uid, targetAccountId, nuevoSaldo);
+
+      toast.success('Movimiento registrado con éxito.');
       // Limpiar formulario
       setTxAmount('');
       setTxDescription('');
@@ -1678,6 +1870,9 @@ export default function App() {
               ? accData.saldo - monto
               : accData.saldo + monto;
             await updateDoc(accRef, { saldo: nuevoSaldo });
+
+            // Sincronizar saldo de cuenta con la deuda asociada
+            await syncAccountDebtBalance(currentUser.uid, accId, nuevoSaldo);
           }
         }
       }
@@ -1694,10 +1889,10 @@ export default function App() {
     e.preventDefault();
     if (!currentUser) return;
     if (!newAccountName.trim()) {
-      alert('Por favor ingrese un nombre de cuenta válido.');
+      toast.error('Por favor ingrese un nombre de cuenta válido.');
       return;
     }
-    const parsedBalance = parseFloat(newAccountBalance) || 0;
+    const parsedBalance = parseNumberMask(newAccountBalance);
     const finalSubtipo = newAccountType === 'deuda' ? 'deudas' : newAccountSubtipo;
     
     setNewAccountLoading(true);
@@ -1712,6 +1907,31 @@ export default function App() {
         icono: newAccountIcon,
         fechaCreacion: new Date().toISOString()
       });
+      
+      let createdDebtId: string | null = null;
+      if (newAccountType === 'deuda') {
+        const debtsRef = collection(db, 'usuarios', currentUser.uid, 'deudas');
+        const defaultMinPayment = Math.ceil(parsedBalance * 0.05) || 50;
+        const futureDate = new Date();
+        futureDate.setDate(futureDate.getDate() + 30);
+        const defaultDueDate = futureDate.toISOString().split('T')[0];
+
+        const debtDocRef = await addDoc(debtsRef, {
+          name: newAccountName.trim(),
+          balance: parsedBalance,
+          minPayment: defaultMinPayment,
+          dueDate: defaultDueDate,
+          type: newAccountIcon === 'credit-card' ? 'card' : 'loan',
+          accountId: docRef.id,
+          fechaCreacion: new Date().toISOString()
+        });
+        createdDebtId = debtDocRef.id;
+      }
+
+      if (createdDebtId) {
+        // Vincular el id de la deuda creada
+        await updateDoc(docRef, { debtId: createdDebtId });
+      }
       
       // Registrar transacción de saldo inicial
       if (parsedBalance > 0) {
@@ -1732,6 +1952,7 @@ export default function App() {
         });
       }
 
+      toast.success('¡Cuenta creada exitosamente!');
       setNewAccountName('');
       setNewAccountBalance('');
       setNewAccountColor('emerald');
@@ -1750,9 +1971,27 @@ export default function App() {
   // Eliminar una cuenta de Firestore
   const handleDeleteAccount = async (accountId: string) => {
     if (!currentUser) return;
-    if (!confirm('¿Estás seguro de que deseas eliminar esta cuenta? Los movimientos históricos se conservarán pero la cuenta desaparecerá.')) return;
+    if (!confirm('¿Estás seguro de que deseas eliminar esta cuenta? Los movimientos históricos se conservarán pero la cuenta desaparecerá y se eliminará la obligación de deudas asociada si existe.')) return;
     try {
-      await deleteDoc(doc(db, 'usuarios', currentUser.uid, 'cuentas', accountId));
+      const accRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', accountId);
+      const accSnap = await getDocFromServer(accRef);
+      if (accSnap.exists()) {
+        const accData = accSnap.data();
+        if (accData.debtId) {
+          const debtRef = doc(db, 'usuarios', currentUser.uid, 'deudas', accData.debtId);
+          await deleteDoc(debtRef);
+        } else if (accData.tipo === 'deuda') {
+          const debtsRef = collection(db, 'usuarios', currentUser.uid, 'deudas');
+          const q = query(debtsRef, where('accountId', '==', accountId));
+          const qSnap = await getDocsFromServer(q);
+          if (!qSnap.empty) {
+            for (const dDoc of qSnap.docs) {
+              await deleteDoc(doc(db, 'usuarios', currentUser.uid, 'deudas', dDoc.id));
+            }
+          }
+        }
+      }
+      await deleteDoc(accRef);
       if (selectedAccountId === accountId) {
         setSelectedAccountId(null);
       }
@@ -1766,17 +2005,17 @@ export default function App() {
   const handleAccountTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedAccountId) {
-      alert('Seleccione una cuenta primero.');
+      toast.error('Seleccione una cuenta primero.');
       return;
     }
-    if (!actTxAmount || isNaN(parseFloat(actTxAmount)) || parseFloat(actTxAmount) <= 0) {
-      alert('Por favor ingrese un monto válido.');
+    const parsedAmount = parseNumberMask(actTxAmount);
+    if (parsedAmount <= 0) {
+      toast.error('Por favor ingrese un monto válido.');
       return;
     }
 
     setActTxLoading(true);
     try {
-      const parsedAmount = parseFloat(actTxAmount);
       const targetAccount = accounts.find(a => a.id === selectedAccountId);
       if (!targetAccount) throw new Error("Account not found");
 
@@ -1805,9 +2044,14 @@ export default function App() {
       const accRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', selectedAccountId);
       await updateDoc(accRef, { saldo: nuevoSaldo });
 
+      // Sincronizar saldo de cuenta con la deuda asociada
+      await syncAccountDebtBalance(currentUser.uid, selectedAccountId, nuevoSaldo);
+
+      toast.success('Transacción registrada con éxito.');
       // Limpiar campos
       setActTxAmount('');
       setActTxDescription('');
+      setShowAddAccountTxModal(false);
     } catch (err) {
       console.error("Error running account transaction:", err);
       handleFirestoreError(err, OperationType.WRITE, `usuarios/${currentUser.uid}/movimientos`);
@@ -1820,25 +2064,25 @@ export default function App() {
   const handleAccountTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedAccountId) {
-      alert('Seleccione una cuenta de origen primero.');
+      toast.error('Seleccione una cuenta de origen primero.');
       return;
     }
     if (!transferTargetAccountId) {
-      alert('Seleccione una cuenta de destino.');
+      toast.error('Seleccione una cuenta de destino.');
       return;
     }
     if (selectedAccountId === transferTargetAccountId) {
-      alert('La cuenta de origen y de destino no pueden ser la misma.');
+      toast.error('La cuenta de origen y de destino no pueden ser la misma.');
       return;
     }
-    if (!transferAmount || isNaN(parseFloat(transferAmount)) || parseFloat(transferAmount) <= 0) {
-      alert('Por favor ingrese un monto válido.');
+    const parsedAmount = parseNumberMask(transferAmount);
+    if (parsedAmount <= 0) {
+      toast.error('Por favor ingrese un monto válido.');
       return;
     }
 
     setTransferLoading(true);
     try {
-      const parsedAmount = parseFloat(transferAmount);
       const sourceAccount = accounts.find(a => a.id === selectedAccountId);
       const targetAccount = accounts.find(a => a.id === transferTargetAccountId);
 
@@ -1899,11 +2143,15 @@ export default function App() {
       const targetRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', transferTargetAccountId);
       await updateDoc(targetRef, { saldo: nuevoSaldoDestino });
 
+      // Sincronizar saldos de cuentas con deudas asociadas si existen
+      await syncAccountDebtBalance(currentUser.uid, selectedAccountId, nuevoSaldoOrigen);
+      await syncAccountDebtBalance(currentUser.uid, transferTargetAccountId, nuevoSaldoDestino);
+
       // Limpiar campos
       setTransferAmount('');
       setTransferTargetAccountId('');
       setTransferDescription('');
-      alert('Transferencia realizada con éxito.');
+      toast.success('Transferencia realizada con éxito.');
     } catch (err) {
       console.error("Error running account transfer:", err);
       handleFirestoreError(err, OperationType.WRITE, `usuarios/${currentUser.uid}/movimientos`);
@@ -1916,32 +2164,32 @@ export default function App() {
   const handleCreateNewTx = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) {
-      alert('Debe iniciar sesión primero.');
+      toast.error('Debe iniciar sesión primero.');
       return;
     }
-    if (!newTxAmount || isNaN(parseFloat(newTxAmount)) || parseFloat(newTxAmount) <= 0) {
-      alert('Por favor, ingrese un monto de valor válido.');
+    const parsedAmount = parseNumberMask(newTxAmount);
+    if (parsedAmount <= 0) {
+      toast.error('Por favor, ingrese un monto de valor válido.');
       return;
     }
     if (!newTxAccountId) {
-      alert('Por favor, seleccione una cuenta.');
+      toast.error('Por favor, seleccione una cuenta.');
       return;
     }
 
     setNewTxLoading(true);
     try {
-      const parsedAmount = parseFloat(newTxAmount);
       const todayISO = new Date(newTxDate).toISOString();
       const desc = newTxNotes.trim();
 
       if (newTxType === 'transfer') {
         if (!newTxTargetAccountId) {
-          alert('Por favor, seleccione una cuenta de destino.');
+          toast.error('Por favor, seleccione una cuenta de destino.');
           setNewTxLoading(false);
           return;
         }
         if (newTxAccountId === newTxTargetAccountId) {
-          alert('La cuenta de origen y de destino no pueden ser la misma.');
+          toast.error('La cuenta de origen y de destino no pueden ser la misma.');
           setNewTxLoading(false);
           return;
         }
@@ -2011,6 +2259,10 @@ export default function App() {
         const targetRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', newTxTargetAccountId);
         await updateDoc(targetRef, { saldo: nuevoSaldoDestino });
 
+        // Sincronizar saldos de cuentas con deudas asociadas si existen
+        await syncAccountDebtBalance(currentUser.uid, newTxAccountId, nuevoSaldoOrigen);
+        await syncAccountDebtBalance(currentUser.uid, newTxTargetAccountId, nuevoSaldoDestino);
+
       } else {
         // Ingreso o Gasto
         const targetAccount = accounts.find(a => a.id === newTxAccountId);
@@ -2047,6 +2299,9 @@ export default function App() {
         // Actualizar saldo
         const accRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', newTxAccountId);
         await updateDoc(accRef, { saldo: nuevoSaldo });
+
+        // Sincronizar saldo de cuenta con la deuda asociada
+        await syncAccountDebtBalance(currentUser.uid, newTxAccountId, nuevoSaldo);
       }
 
       // Limpiar campos y cerrar modal
@@ -2055,7 +2310,7 @@ export default function App() {
       setNewTxAttachment(null);
       setNewTxAttachmentName('');
       setShowNewTxModal(false);
-      alert('Movimiento registrado con éxito.');
+      toast.success('Movimiento registrado con éxito.');
     } catch (err) {
       console.error("Error al registrar movimiento:", err);
       handleFirestoreError(err, OperationType.WRITE, `usuarios/${currentUser.uid}/movimientos`);
@@ -3378,6 +3633,19 @@ export class DashboardComponent {
 
     return (
     <div className="min-h-screen bg-[#0f172a] text-slate-200 flex flex-col font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-300 relative overflow-hidden">
+      <Toaster position="top-right" reverseOrder={false} toastOptions={{
+        style: {
+          background: '#1e293b',
+          color: '#f8fafc',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+        },
+        success: {
+          iconTheme: {
+            primary: '#10b981',
+            secondary: '#ffffff',
+          },
+        },
+      }} />
       
       {/* Mesh Gradient Background Elements */}
       <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/15 rounded-full blur-[120px] pointer-events-none z-0"></div>
@@ -3393,12 +3661,19 @@ export class DashboardComponent {
             className="w-full max-w-md bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl flex flex-col gap-6"
           >
             <div className="flex flex-col items-center text-center gap-2">
-              <img 
-                src="/src/assets/images/app_logo_1782999126227.jpg" 
-                alt="Contabilid-App Logo" 
-                className="w-16 h-16 rounded-2xl shadow-xl shadow-emerald-500/20 object-cover"
-                referrerPolicy="no-referrer"
-              />
+              {!loginLogoError ? (
+                <img 
+                  src={appLogo} 
+                  alt="Contabilid-App Logo" 
+                  className="w-16 h-16 rounded-2xl shadow-xl shadow-emerald-500/20 object-cover border border-white/10"
+                  referrerPolicy="no-referrer"
+                  onError={() => setLoginLogoError(true)}
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 shadow-xl shadow-emerald-500/20 flex items-center justify-center border border-white/20">
+                  <span className="text-xl font-black text-white tracking-wider">CA</span>
+                </div>
+              )}
               <h1 className="text-2xl font-black tracking-tight text-white mt-2">Contabilid-App</h1>
               <p className="text-xs text-slate-400">Tu panel inteligente de control financiero y contable</p>
             </div>
@@ -3511,26 +3786,52 @@ export class DashboardComponent {
         /* VISTA PRINCIPAL CON SIDEBAR LATERAL Y MÓDULOS DE NAVEGACIÓN */
         <div className="flex-1 flex flex-col md:flex-row relative z-10 min-h-screen">
           
+          {/* OVERLAY PARA MÓVILES */}
+          {isMobileMenuOpen && (
+            <div 
+              className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 md:hidden transition-opacity duration-300"
+              onClick={() => setIsMobileMenuOpen(false)}
+            />
+          )}
+
           {/* SIDEBAR LATERAL IZQUIERDO */}
-          <aside className="w-full md:w-64 lg:w-72 bg-slate-950/40 backdrop-blur-xl border-r border-white/10 flex flex-col shrink-0">
+          <aside className={`fixed inset-y-0 left-0 z-50 w-72 bg-[#0a0f1d]/98 backdrop-blur-xl border-r border-white/10 flex flex-col shrink-0 transition-all duration-300 ease-in-out ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} ${isDesktopSidebarOpen ? 'md:translate-x-0 md:static md:w-64 lg:w-72 md:bg-slate-950/40 md:opacity-100' : 'md:-translate-x-full md:absolute md:w-0 md:opacity-0 md:border-r-0 md:overflow-hidden'}`}>
             {/* Cabezal Sidebar */}
-            <div className="p-6 border-b border-white/10 flex items-center gap-3">
-              <img 
-                src="/src/assets/images/app_logo_1782999126227.jpg" 
-                alt="Contabilid-App Logo" 
-                className="w-9 h-9 rounded-xl shadow-md object-cover"
-                referrerPolicy="no-referrer"
-              />
-              <div>
-                <h1 className="text-base font-extrabold tracking-tight text-white leading-tight">Contabilid-App</h1>
-                <p className="text-[10px] text-slate-500 font-mono">Consola Financiera</p>
+            <div className="px-6 h-20 border-b border-white/10 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3">
+                {!sidebarLogoError ? (
+                  <img 
+                    src={appLogo} 
+                    alt="Contabilid-App Logo" 
+                    className="w-9 h-9 rounded-xl shadow-md object-cover border border-white/10"
+                    referrerPolicy="no-referrer"
+                    onError={() => setSidebarLogoError(true)}
+                  />
+                ) : (
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 shadow-md flex items-center justify-center border border-white/20">
+                    <span className="text-sm font-black text-white tracking-wider">CA</span>
+                  </div>
+                )}
+                <div>
+                  <h1 className="text-base font-extrabold tracking-tight text-white leading-tight">Contabilid-App</h1>
+                  <p className="text-[10px] text-slate-500 font-mono">Consola Financiera</p>
+                </div>
               </div>
+
+              {/* Botón cerrar para móviles */}
+              <button
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="md:hidden p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                aria-label="Cerrar menú"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
             {/* Lista de Navegación del Sidebar */}
             <nav className="flex-1 p-4 flex flex-col gap-1 overflow-y-auto max-h-[calc(100vh-220px)] custom-scrollbar">
               <button
-                onClick={() => setActiveModule('dashboard')}
+                onClick={() => handleSelectModule('dashboard')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'dashboard' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3543,7 +3844,7 @@ export class DashboardComponent {
 
               <button
                 onClick={() => {
-                  setActiveModule('cuentas');
+                  handleSelectModule('cuentas');
                   if (!selectedAccountId && accounts.length > 0) {
                     setSelectedAccountId(accounts[0].id);
                   }
@@ -3559,7 +3860,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('consultas')}
+                onClick={() => handleSelectModule('consultas')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'consultas' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3571,7 +3872,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('categorias')}
+                onClick={() => handleSelectModule('categorias')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'categorias' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3583,7 +3884,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('presupuestos')}
+                onClick={() => handleSelectModule('presupuestos')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'presupuestos' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3595,7 +3896,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('ahorros')}
+                onClick={() => handleSelectModule('ahorros')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'ahorros' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3607,7 +3908,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('deudas')}
+                onClick={() => handleSelectModule('deudas')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'deudas' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3619,7 +3920,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('suscripciones')}
+                onClick={() => handleSelectModule('suscripciones')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'suscripciones' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3631,7 +3932,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('estadisticas')}
+                onClick={() => handleSelectModule('estadisticas')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'estadisticas' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3643,7 +3944,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('reportes')}
+                onClick={() => handleSelectModule('reportes')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'reportes' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3655,7 +3956,7 @@ export class DashboardComponent {
               </button>
 
               <button
-                onClick={() => setActiveModule('usuario')}
+                onClick={() => handleSelectModule('usuario')}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all border text-left cursor-pointer ${
                   activeModule === 'usuario' 
                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-sm' 
@@ -3691,37 +3992,53 @@ export class DashboardComponent {
           {/* CONTENEDOR DE CONTENIDO PRINCIPAL */}
           <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-[#0a0f1d]/50">
             {/* Header del módulo */}
-            <header className="px-6 py-4 border-b border-white/10 bg-slate-900/30 flex justify-between items-center shrink-0">
-              <div>
-                <h2 className="text-lg font-black tracking-tight text-white uppercase">
-                  {activeModule === 'dashboard' && 'Dashboard General'}
-                  {activeModule === 'cuentas' && 'Gestor de Cuentas'}
-                  {activeModule === 'consultas' && 'Movimientos'}
-                  {activeModule === 'categorias' && 'Gestor de Categorías'}
-                  {activeModule === 'presupuestos' && '📈 Control de Presupuestos'}
-                  {activeModule === 'ahorros' && '💰 Metas de Ahorro'}
-                  {activeModule === 'deudas' && '💳 Control de Deudas'}
-                  {activeModule === 'suscripciones' && '📅 Control de Suscripciones'}
-                  {activeModule === 'estadisticas' && '📊 Estadísticas y Análisis'}
-                  {activeModule === 'reportes' && '📑 Reportes Financieros'}
-                  {activeModule === 'usuario' && '⚙ Configuración'}
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {activeModule === 'dashboard' && 'Métricas contables, balance de activos y distribución del flujo de caja.'}
-                  {activeModule === 'cuentas' && 'Crea cuentas monetarias de activo/crédito o deuda/pasivo, y gestiona sus saldos.'}
-                  {activeModule === 'consultas' && 'Registra, transfiere y gestiona todos tus movimientos con adjuntos de facturas y filtros en tiempo real.'}
-                  {activeModule === 'categorias' && 'Crea y personaliza categorías de ingresos y egresos para clasificar tus movimientos.'}
-                  {activeModule === 'presupuestos' && 'Define límites mensuales para tus gastos por categoría y controla visualmente tus excesos.'}
-                  {activeModule === 'ahorros' && 'Crea metas de ahorro a largo plazo y realiza seguimiento visual de tu progreso.'}
-                  {activeModule === 'deudas' && 'Registra tus tarjetas y préstamos, controla saldos, cuotas mínimas y alertas de días de pago.'}
-                  {activeModule === 'suscripciones' && 'Gestiona tus pagos recurrentes de entretenimiento, servicios y software.'}
-                  {activeModule === 'estadisticas' && 'Visualiza gráficos circulares de gastos, histórico de 12 meses y balance general.'}
-                  {activeModule === 'reportes' && 'Genera reportes de patrimonio, flujo de caja y balances mensuales o anuales, y expórtalos.'}
-                  {activeModule === 'usuario' && 'Detalles de tu perfil personal, moneda predeterminada, idioma y personalización.'}
-                </p>
+            <header className="px-6 h-20 border-b border-white/10 bg-slate-900/30 flex justify-between items-center shrink-0 gap-4">
+              <div className="flex items-center gap-3">
+                {/* Botón hamburguesa */}
+                <button
+                  onClick={() => {
+                    if (window.innerWidth < 768) {
+                      setIsMobileMenuOpen(!isMobileMenuOpen);
+                    } else {
+                      setIsDesktopSidebarOpen(!isDesktopSidebarOpen);
+                    }
+                  }}
+                  className="p-2 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  aria-label="Abrir menú"
+                >
+                  <Menu className="w-5 h-5" />
+                </button>
+                <div>
+                  <h2 className="text-base md:text-lg font-black tracking-tight text-white uppercase">
+                    {activeModule === 'dashboard' && 'Dashboard General'}
+                    {activeModule === 'cuentas' && 'Gestor de Cuentas'}
+                    {activeModule === 'consultas' && 'Movimientos'}
+                    {activeModule === 'categorias' && 'Gestor de Categorías'}
+                    {activeModule === 'presupuestos' && '📈 Control de Presupuestos'}
+                    {activeModule === 'ahorros' && '💰 Metas de Ahorro'}
+                    {activeModule === 'deudas' && '💳 Control de Deudas'}
+                    {activeModule === 'suscripciones' && '📅 Control de Suscripciones'}
+                    {activeModule === 'estadisticas' && '📊 Estadísticas y Análisis'}
+                    {activeModule === 'reportes' && '📑 Reportes Financieros'}
+                    {activeModule === 'usuario' && '⚙ Configuración'}
+                  </h2>
+                  <p className="text-[10px] md:text-xs text-slate-400 mt-0.5 line-clamp-1">
+                    {activeModule === 'dashboard' && 'Métricas contables, balance de activos y distribución del flujo de caja.'}
+                    {activeModule === 'cuentas' && 'Crea cuentas monetarias de activo/crédito o deuda/pasivo, y gestiona sus saldos.'}
+                    {activeModule === 'consultas' && 'Registra, transfiere y gestiona todos tus movimientos con adjuntos de facturas y filtros en tiempo real.'}
+                    {activeModule === 'categorias' && 'Crea y personaliza categorías de ingresos y egresos para clasificar tus movimientos.'}
+                    {activeModule === 'presupuestos' && 'Define límites mensuales para tus gastos por categoría y controla visualmente tus excesos.'}
+                    {activeModule === 'ahorros' && 'Crea metas de ahorro a largo plazo y realiza seguimiento visual de tu progreso.'}
+                    {activeModule === 'deudas' && 'Registra tus tarjetas y préstamos, controla saldos, cuotas mínimas y alertas de días de pago.'}
+                    {activeModule === 'suscripciones' && 'Gestiona tus pagos recurrentes de entretenimiento, servicios y software.'}
+                    {activeModule === 'estadisticas' && 'Visualiza gráficos circulares de gastos, histórico de 12 meses y balance general.'}
+                    {activeModule === 'reportes' && 'Genera reportes de patrimonio, flujo de caja y balances mensuales o anuales, y expórtalos.'}
+                    {activeModule === 'usuario' && 'Detalles de tu perfil personal, moneda predeterminada, idioma y personalización.'}
+                  </p>
+                </div>
               </div>
               {firestoreConnected && (
-                <div className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20">
+                <div className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                   Conectado
                 </div>
@@ -3740,124 +4057,29 @@ export class DashboardComponent {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.15 }}
-                    className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+                    className="flex flex-col gap-6 w-full"
                   >
-                    {/* COLUMNA IZQUIERDA: CREAR / REGISTRAR SUSCRIPCIÓN */}
-                    <div className="lg:col-span-4 flex flex-col gap-4">
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col gap-4">
-                        <div className="absolute top-[-10%] right-[-10%] w-[120px] h-[120px] bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
-                        
-                        <div>
-                          <h3 className="font-extrabold text-white text-base tracking-tight flex items-center gap-2">
-                            <Tv className="w-5 h-5 text-emerald-400" />
-                            Nueva Suscripción
-                          </h3>
-                          <p className="text-xs text-slate-400 mt-1">Registra tus gastos recurrentes fijos para evitar fugas de dinero.</p>
-                        </div>
-
-                        <form onSubmit={handleCreateSubscription} className="flex flex-col gap-4 mt-2">
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre del Servicio</label>
-                            <input
-                              type="text"
-                              required
-                              placeholder="Ej: Netflix, Spotify, OpenAI, Disney+"
-                              value={newSubName}
-                              onChange={(e) => setNewSubName(e.target.value)}
-                              className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                            />
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Costo Mensual</label>
-                              <div className="relative font-sans">
-                                <span className="absolute left-3 top-2.5 text-slate-500 text-xs font-bold">$</span>
-                                <input
-                                  type="number"
-                                  required
-                                  placeholder="0"
-                                  value={newSubCost}
-                                  onChange={(e) => setNewSubCost(e.target.value)}
-                                  className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-7 pr-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                                />
-                              </div>
-                            </div>
-
-                            <div>
-                              <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Próximo Cobro</label>
-                              <input
-                                type="date"
-                                required
-                                value={newSubDueDate}
-                                onChange={(e) => setNewSubDueDate(e.target.value)}
-                                className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                              />
-                            </div>
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Cuenta de Débito</label>
-                            <select
-                              value={newSubAccount}
-                              onChange={(e) => setNewSubAccount(e.target.value)}
-                              className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
-                            >
-                              <option value="Sin especificar">Seleccionar Cuenta (Opcional)</option>
-                              {accounts.map((acc) => (
-                                <option key={acc.id} value={acc.nombre}>{acc.nombre} (${acc.saldo.toLocaleString('es-CO')})</option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Estado Inicial</label>
-                            <div className="grid grid-cols-2 gap-2 bg-slate-950/60 p-1 rounded-xl border border-white/5">
-                              <button
-                                type="button"
-                                onClick={() => setNewSubStatus('active')}
-                                className={`py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  newSubStatus === 'active'
-                                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
-                                    : 'bg-transparent border border-transparent text-slate-500'
-                                }`}
-                              >
-                                Activo
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setNewSubStatus('paused')}
-                                className={`py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  newSubStatus === 'paused'
-                                    ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400'
-                                    : 'bg-transparent border border-transparent text-slate-500'
-                                }`}
-                              >
-                                Pausado
-                              </button>
-                            </div>
-                          </div>
-
-                          <button
-                            type="submit"
-                            disabled={newSubLoading}
-                            className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 py-3 rounded-xl text-xs font-extrabold tracking-wide transition-all shadow-md shadow-emerald-500/10 cursor-pointer mt-2 flex items-center justify-center gap-1.5"
-                          >
-                            {newSubLoading ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <>
-                                <PlusCircle className="w-4 h-4" />
-                                Agregar Suscripción
-                              </>
-                            )}
-                          </button>
-                        </form>
+                    {/* ENCABEZADO DE SECCIÓN CON BOTÓN REGISTRAR */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/40 border border-white/5 rounded-2xl p-5 shadow-lg">
+                      <div>
+                        <h3 className="text-sm font-black text-white tracking-wider uppercase flex items-center gap-2">
+                          <Tv className="w-4 h-4 text-emerald-400" />
+                          Control de Suscripciones
+                        </h3>
+                        <p className="text-[11px] text-slate-400 mt-1">Sigue el rastro de tus pagos fijos automáticos y evita cargos inesperados.</p>
                       </div>
+
+                      <button
+                        onClick={() => setIsAddSubModalOpen(true)}
+                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-slate-950 text-xs font-extrabold px-5 py-3 rounded-xl shadow-lg hover:shadow-emerald-500/15 cursor-pointer flex items-center justify-center gap-2 transition-all shrink-0"
+                      >
+                        <Plus className="w-4 h-4 text-slate-950 stroke-[3px]" />
+                        Nueva Suscripción
+                      </button>
                     </div>
 
                     {/* COLUMNA DERECHA: KPI Y LISTA DE SUSCRIPCIONES */}
-                    <div className="lg:col-span-8 flex flex-col gap-4">
+                    <div className="flex flex-col gap-4">
                       {/* KPIs de Suscripciones */}
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div className="bg-white/5 border border-white/10 rounded-2xl p-5 flex flex-col gap-1 shadow-lg relative overflow-hidden">
@@ -4672,18 +4894,18 @@ export class DashboardComponent {
                               <Activity className="w-4 h-4 text-emerald-400" />
                               Salud Financiera General
                             </h3>
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                               {/* Saldo Total */}
                               <div className="bg-gradient-to-br from-emerald-500/10 to-transparent border border-emerald-500/20 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[120px]">
                                 <div>
                                   <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Saldo Total</div>
-                                  <div className="text-3xl font-black mt-2 tracking-tight text-white leading-none">
+                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-white leading-none break-all">
                                     {formatValue(saldoTotal)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-3">Sumatoria general de todos los fondos</p>
-                                <div className="absolute right-4 top-4 bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/10 text-emerald-400">
-                                  <Wallet className="w-5 h-5" />
+                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Sumatoria de fondos</p>
+                                <div className="absolute right-4 top-4 bg-emerald-500/10 p-2 rounded-xl border border-emerald-500/10 text-emerald-400">
+                                  <Wallet className="w-4 h-4" />
                                 </div>
                               </div>
 
@@ -4691,13 +4913,13 @@ export class DashboardComponent {
                               <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[120px]">
                                 <div>
                                   <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Disponible</div>
-                                  <div className="text-2xl font-black mt-2 tracking-tight text-white leading-none">
+                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-white leading-none break-all">
                                     {formatValue(disponible)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-3">Saldos líquidos y efectivo activo</p>
-                                <div className="absolute right-4 top-4 bg-blue-500/10 p-2.5 rounded-xl border border-blue-500/10 text-blue-400">
-                                  <TrendingUp className="w-5 h-5" />
+                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Saldos líquidos activos</p>
+                                <div className="absolute right-4 top-4 bg-blue-500/10 p-2 rounded-xl border border-blue-500/10 text-blue-400">
+                                  <TrendingUp className="w-4 h-4" />
                                 </div>
                               </div>
 
@@ -4705,13 +4927,13 @@ export class DashboardComponent {
                               <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[120px]">
                                 <div>
                                   <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Deudas</div>
-                                  <div className="text-2xl font-black mt-2 tracking-tight text-rose-400 leading-none">
+                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-rose-400 leading-none break-all">
                                     {formatValue(deudas)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-3">Tarjetas y pasivos por liquidar</p>
-                                <div className="absolute right-4 top-4 bg-red-500/10 p-2.5 rounded-xl border border-red-500/10 text-red-400">
-                                  <CreditCard className="w-5 h-5" />
+                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Tarjetas y pasivos</p>
+                                <div className="absolute right-4 top-4 bg-red-500/10 p-2 rounded-xl border border-red-500/10 text-red-400">
+                                  <CreditCard className="w-4 h-4" />
                                 </div>
                               </div>
 
@@ -4719,13 +4941,13 @@ export class DashboardComponent {
                               <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[120px]">
                                 <div>
                                   <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Ahorros</div>
-                                  <div className="text-2xl font-black mt-2 tracking-tight text-emerald-400 leading-none">
+                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-emerald-400 leading-none break-all">
                                     {formatValue(ahorros)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-3">Cuentas designadas para reservas</p>
-                                <div className="absolute right-4 top-4 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/10 text-amber-400">
-                                  <Sparkles className="w-5 h-5" />
+                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Reservas designadas</p>
+                                <div className="absolute right-4 top-4 bg-amber-500/10 p-2 rounded-xl border border-amber-500/10 text-amber-400">
+                                  <Sparkles className="w-4 h-4" />
                                 </div>
                               </div>
                             </div>
@@ -4737,18 +4959,18 @@ export class DashboardComponent {
                               <Calendar className="w-4 h-4 text-indigo-400" />
                               Desempeño del Período
                             </h3>
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                               {/* 💰 Ingresos este mes */}
                               <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px]">
                                 <div>
                                   <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-1.5">
-                                    <span>💰</span> Ingresos este mes
+                                    <span>💰</span> Ingresos
                                   </div>
-                                  <div className="text-2xl font-black mt-2 tracking-tight text-emerald-400 leading-none">
+                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-emerald-400 leading-none break-all">
                                     {formatValue(ingresosMes)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-2">Depósitos y cobros del mes</p>
+                                <p className="text-[10px] text-slate-500 mt-2 line-clamp-1">Depósitos del mes</p>
                                 <div className="absolute right-4 top-4 bg-emerald-500/10 p-1.5 rounded-lg text-emerald-400">
                                   <ArrowUpRight className="w-3.5 h-3.5" />
                                 </div>
@@ -4758,13 +4980,13 @@ export class DashboardComponent {
                               <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px]">
                                 <div>
                                   <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-1.5">
-                                    <span>💸</span> Gastos este mes
+                                    <span>💸</span> Gastos
                                   </div>
-                                  <div className="text-2xl font-black mt-2 tracking-tight text-red-400 leading-none">
+                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-red-400 leading-none break-all">
                                     {formatValue(gastosMes)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-2">Pagos y consumos del mes</p>
+                                <p className="text-[10px] text-slate-500 mt-2 line-clamp-1">Pagos del mes</p>
                                 <div className="absolute right-4 top-4 bg-red-500/10 p-1.5 rounded-lg text-red-400">
                                   <ArrowDownRight className="w-3.5 h-3.5" />
                                 </div>
@@ -4774,13 +4996,13 @@ export class DashboardComponent {
                               <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px]">
                                 <div>
                                   <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-1.5">
-                                    <span>📈</span> Ahorro del mes
+                                    <span>📈</span> Ahorro
                                   </div>
-                                  <div className={`text-2xl font-black mt-2 tracking-tight leading-none ${ahorroMes >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  <div className={`text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight leading-none break-all ${ahorroMes >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                                     {formatValue(ahorroMes)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-2">Superávit acumulado</p>
+                                <p className="text-[10px] text-slate-500 mt-2 line-clamp-1">Superávit acumulado</p>
                                 <div className={`absolute right-4 top-4 p-1.5 rounded-lg ${ahorroMes >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
                                   <TrendingUp className="w-3.5 h-3.5" />
                                 </div>
@@ -4790,13 +5012,13 @@ export class DashboardComponent {
                               <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px]">
                                 <div>
                                   <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-1.5">
-                                    <span>📊</span> Patrimonio actual
+                                    <span>📊</span> Patrimonio
                                   </div>
-                                  <div className="text-2xl font-black mt-2 tracking-tight text-indigo-400 leading-none">
+                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-indigo-400 leading-none break-all">
                                     {formatValue(patrimonioActual)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-2">Valor neto real patrimonial</p>
+                                <p className="text-[10px] text-slate-500 mt-2 line-clamp-1">Valor neto real</p>
                                 <div className="absolute right-4 top-4 bg-indigo-500/10 p-1.5 rounded-lg text-indigo-400">
                                   <Layers className="w-3.5 h-3.5" />
                                 </div>
@@ -4990,12 +5212,12 @@ export class DashboardComponent {
                             <div className="relative">
                               <DollarSign className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-500" />
                               <input 
-                                type="number"
-                                step="0.01"
-                                placeholder="0.00"
+                                type="text"
+                                inputMode="numeric"
+                                placeholder="0"
                                 required
                                 value={txAmount}
-                                onChange={(e) => setTxAmount(e.target.value)}
+                                onChange={(e) => setTxAmount(formatNumberMask(e.target.value))}
                                 className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-2 pl-8 pr-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
                               />
                             </div>
@@ -5191,122 +5413,6 @@ export class DashboardComponent {
                         </button>
                       </div>
 
-                      {/* Modal o Tarjeta de Nueva Cuenta */}
-                      {showNewAccountModal && (
-                        <motion.div 
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          className="bg-white/5 border border-white/15 rounded-2xl p-4 flex flex-col gap-3 shadow-xl"
-                        >
-                          <h4 className="text-xs font-bold text-white uppercase tracking-wider">Registrar Nueva Cuenta</h4>
-                          <form onSubmit={handleCreateAccount} className="flex flex-col gap-3">
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Nombre</label>
-                                <input 
-                                  type="text" 
-                                  required
-                                  placeholder="Ej: Banco BBVA"
-                                  value={newAccountName}
-                                  onChange={(e) => setNewAccountName(e.target.value)}
-                                  className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-1.5 px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Tipo</label>
-                                <select
-                                  value={newAccountType}
-                                  onChange={(e: any) => setNewAccountType(e.target.value)}
-                                  className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-1.5 px-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                >
-                                  <option value="credito">Crédito / Ahorro (Activos)</option>
-                                  <option value="deuda">Tarjeta / Deuda (Pasivos)</option>
-                                </select>
-                              </div>
-                            </div>
-
-                            {newAccountType === 'credito' && (
-                              <div>
-                                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Subtipo de Activo</label>
-                                <select
-                                  value={newAccountSubtipo}
-                                  onChange={(e: any) => setNewAccountSubtipo(e.target.value)}
-                                  className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-1.5 px-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                >
-                                  <option value="disponible">Disponible (Efectivo / Corriente)</option>
-                                  <option value="ahorros">Ahorros / Inversión / Reservas</option>
-                                </select>
-                              </div>
-                            )}
-
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Color de Acento</label>
-                                <select
-                                  value={newAccountColor}
-                                  onChange={(e) => setNewAccountColor(e.target.value)}
-                                  className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-1.5 px-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                >
-                                  <option value="emerald">Verde (Emerald)</option>
-                                  <option value="blue">Azul (Blue)</option>
-                                  <option value="rose">Rosa (Rose)</option>
-                                  <option value="red">Rojo (Red)</option>
-                                  <option value="purple">Morado (Purple)</option>
-                                  <option value="amber">Ámbar (Amber)</option>
-                                  <option value="yellow">Amarillo (Yellow)</option>
-                                  <option value="indigo">Índigo (Indigo)</option>
-                                  <option value="zinc">Gris (Zinc)</option>
-                                </select>
-                              </div>
-                              <div>
-                                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Icono de Cuenta</label>
-                                <select
-                                  value={newAccountIcon}
-                                  onChange={(e) => setNewAccountIcon(e.target.value)}
-                                  className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-1.5 px-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                >
-                                  <option value="wallet">Billetera (Wallet)</option>
-                                  <option value="landmark">Banco (Landmark)</option>
-                                  <option value="credit-card">Tarjeta (Credit Card)</option>
-                                  <option value="banknote">Efectivo (Banknote)</option>
-                                  <option value="smartphone">Móvil (Smartphone)</option>
-                                  <option value="dollar-sign">Dólar (Dollar Sign)</option>
-                                  <option value="coins">Caja Menor (Coins)</option>
-                                </select>
-                              </div>
-                            </div>
-
-                            <div>
-                              <label className="block text-[10px] font-semibold text-slate-400 mb-1">Saldo Inicial ($)</label>
-                              <input 
-                                type="number" 
-                                step="0.01"
-                                placeholder="0.00"
-                                value={newAccountBalance}
-                                onChange={(e) => setNewAccountBalance(e.target.value)}
-                                className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-1.5 px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                              />
-                            </div>
-                            <div className="flex justify-end gap-2 mt-1">
-                              <button
-                                type="button"
-                                onClick={() => setShowNewAccountModal(false)}
-                                className="bg-white/5 hover:bg-white/10 text-slate-400 text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-white/10 cursor-pointer"
-                              >
-                                Cancelar
-                              </button>
-                              <button
-                                type="submit"
-                                disabled={newAccountLoading}
-                                className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-bold px-3.5 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer"
-                              >
-                                {newAccountLoading ? <Loader2 className="w-3 animate-spin" /> : 'Crear Cuenta'}
-                              </button>
-                            </div>
-                          </form>
-                        </motion.div>
-                      )}
-
                       {/* Grid de Cuentas */}
                       <div className="flex flex-col gap-3">
                         {accounts.length === 0 ? (
@@ -5448,98 +5554,15 @@ export class DashboardComponent {
                                   {selectedAcc.tipo === 'credito' ? 'Activo' : 'Tarjeta / Pasivo'}
                                 </span>
                               </div>
-                            </div>
 
-                            {/* Formularios de Entrada / Salida */}
-                            <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg flex flex-col gap-4">
-                              <h4 className="font-bold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-2">Registrar Transacción Directa</h4>
-                              
-                              <form onSubmit={handleAccountTransaction} className="flex flex-col gap-3.5">
-                                <div className="grid grid-cols-2 gap-3">
-                                  <div>
-                                    <label className="block text-[10px] font-semibold text-slate-300 mb-1">Monto ($)</label>
-                                    <input 
-                                      type="number"
-                                      step="0.01"
-                                      required
-                                      placeholder="0.00"
-                                      value={actTxAmount}
-                                      onChange={(e) => setActTxAmount(e.target.value)}
-                                      className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[10px] font-semibold text-slate-300 mb-1">Tipo de Operación</label>
-                                    <div className="grid grid-cols-2 gap-1 bg-slate-950/50 p-1 border border-white/5 rounded-xl">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActTxType('income');
-                                          setActTxCategory(categories.income[0]);
-                                        }}
-                                        className={`py-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer ${actTxType === 'income' ? 'bg-emerald-500 text-slate-950' : 'text-slate-400 hover:text-slate-200'}`}
-                                      >
-                                        DEPÓSITO
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActTxType('expense');
-                                          setActTxCategory(categories.expense[0]);
-                                        }}
-                                        className={`py-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer ${actTxType === 'expense' ? 'bg-red-500 text-slate-950' : 'text-slate-400 hover:text-slate-200'}`}
-                                      >
-                                        RETIRO
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-3">
-                                  <div>
-                                    <label className="block text-[10px] font-semibold text-slate-300 mb-1">Categoría</label>
-                                    <select
-                                      value={actTxCategory}
-                                      onChange={(e) => setActTxCategory(e.target.value)}
-                                      className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-2 px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                    >
-                                      {actTxType === 'income' 
-                                        ? categories.income.map(c => <option key={c} value={c}>{c}</option>)
-                                        : categories.expense.map(c => <option key={c} value={c}>{c}</option>)
-                                      }
-                                    </select>
-                                  </div>
-                                  <div>
-                                    <label className="block text-[10px] font-semibold text-slate-300 mb-1">Descripción</label>
-                                    <input 
-                                      type="text"
-                                      placeholder="Ej: Depósito en OXXO"
-                                      value={actTxDescription}
-                                      onChange={(e) => setActTxDescription(e.target.value)}
-                                      className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-2 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                    />
-                                  </div>
-                                </div>
-
-                                <button
-                                  type="submit"
-                                  disabled={actTxLoading}
-                                  className={`w-full font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg ${
-                                    actTxType === 'income' 
-                                      ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/10' 
-                                      : 'bg-red-500 hover:bg-red-400 text-slate-950 shadow-red-500/10'
-                                  }`}
-                                >
-                                  {actTxLoading ? (
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                  ) : (
-                                    <>
-                                      <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                                      {actTxType === 'income' ? 'Registrar Depósito' : 'Registrar Retiro'}
-                                    </>
-                                  )}
-                                </button>
-                              </form>
+                              {/* Botón para abrir modal de transacción directa */}
+                              <button
+                                onClick={() => setShowAddAccountTxModal(true)}
+                                className="w-full mt-4 bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-slate-950 font-extrabold text-xs py-3 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all cursor-pointer"
+                              >
+                                <Plus className="w-4 h-4 stroke-[3]" />
+                                Registrar Transacción Directa
+                              </button>
                             </div>
 
                             {/* Transferir Dinero a otra Cuenta */}
@@ -5551,12 +5574,12 @@ export class DashboardComponent {
                                   <div>
                                     <label className="block text-[10px] font-semibold text-slate-300 mb-1">Monto a Transferir ($)</label>
                                     <input 
-                                      type="number"
-                                      step="0.01"
+                                      type="text"
+                                      inputMode="numeric"
                                       required
-                                      placeholder="0.00"
+                                      placeholder="0"
                                       value={transferAmount}
-                                      onChange={(e) => setTransferAmount(e.target.value)}
+                                      onChange={(e) => setTransferAmount(formatNumberMask(e.target.value))}
                                       className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                     />
                                   </div>
@@ -6033,127 +6056,29 @@ export class DashboardComponent {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.15 }}
-                    className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+                    className="flex flex-col gap-6 w-full"
                   >
-                    {/* COLUMNA IZQUIERDA: CREAR CATEGORÍA */}
-                    <div className="lg:col-span-5 flex flex-col gap-4">
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col gap-4">
-                        <div className="absolute top-[-10%] right-[-10%] w-[120px] h-[120px] bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
-                        
-                        <div>
-                          <h3 className="font-extrabold text-white text-base tracking-tight flex items-center gap-2">
-                            <PlusCircle className="w-5 h-5 text-emerald-400" />
-                            Nueva Categoría
-                          </h3>
-                          <p className="text-xs text-slate-400 mt-1">Crea una categoría personalizada para clasificar tus movimientos contables.</p>
-                        </div>
-
-                        <form onSubmit={handleCreateCategory} className="flex flex-col gap-4 mt-2">
-                          {/* Nombre de la Categoría */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre de Categoría</label>
-                            <input
-                              type="text"
-                              required
-                              placeholder="Ej: Gimnasio, Restaurantes, Donaciones"
-                              value={newCatName}
-                              onChange={(e) => setNewCatName(e.target.value)}
-                              className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                            />
-                          </div>
-
-                          {/* Tipo de Categoría (Ingreso / Egreso) */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Tipo de Flujo</label>
-                            <div className="grid grid-cols-2 gap-2 bg-slate-950/60 p-1 rounded-xl border border-white/5">
-                              <button
-                                type="button"
-                                onClick={() => setNewCatType('expense')}
-                                className={`py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  newCatType === 'expense'
-                                    ? 'bg-red-500/10 border border-red-500/20 text-red-400 shadow-sm'
-                                    : 'bg-transparent border border-transparent text-slate-500 hover:text-slate-300'
-                                }`}
-                              >
-                                📉 Egreso / Gasto
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setNewCatType('income')}
-                                className={`py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  newCatType === 'income'
-                                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 shadow-sm'
-                                    : 'bg-transparent border border-transparent text-slate-500 hover:text-slate-300'
-                                }`}
-                              >
-                                📈 Ingreso / Sueldo
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Selector de Emoji */}
-                          <div>
-                            <div className="flex justify-between items-center mb-1.5">
-                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Emoji Representativo</label>
-                              <span className="text-[10px] font-mono text-slate-500">Seleccionado: {newCatEmoji}</span>
-                            </div>
-                            
-                            {/* Grid de Emojis Recomendados */}
-                            <div className="bg-slate-950/30 border border-white/5 rounded-xl p-3 flex flex-col gap-3">
-                              <div className="grid grid-cols-8 gap-1.5 max-h-[140px] overflow-y-auto pr-1">
-                                {[
-                                  '🍔', '🚗', '🏠', '🎬', '🛒', '🏥', '🎓', '✈️',
-                                  '🐶', '💼', '💳', '💡', '📱', '🎁', '💰', '📈',
-                                  '🛍️', '💻', '💵', '🍕', '🍿', '🎸', '🎮', '🏋️',
-                                  '📚', '👗', '🎨', '🚕', '🥕', '🥩', '🍩', '🥑',
-                                  '🍹', '🏝️', '🏕️', '🏡', '🚲', '🍿', '🎟️', '💈'
-                                ].map((em) => (
-                                  <button
-                                    key={em}
-                                    type="button"
-                                    onClick={() => setNewCatEmoji(em)}
-                                    className={`aspect-square flex items-center justify-center rounded-lg text-base hover:bg-white/10 transition-all cursor-pointer ${
-                                      newCatEmoji === em ? 'bg-emerald-500/20 border border-emerald-500/40 scale-110' : 'bg-transparent border border-transparent'
-                                    }`}
-                                  >
-                                    {em}
-                                  </button>
-                                ))}
-                              </div>
-
-                              <div className="border-t border-white/5 pt-2 flex items-center gap-2">
-                                <span className="text-[10px] text-slate-500 shrink-0">¿Otro emoji?</span>
-                                <input
-                                  type="text"
-                                  maxLength={2}
-                                  placeholder="Escribe uno"
-                                  value={newCatEmoji}
-                                  onChange={(e) => setNewCatEmoji(e.target.value)}
-                                  className="w-12 text-center bg-slate-950/80 border border-white/10 rounded-lg py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Botón de envío */}
-                          <button
-                            type="submit"
-                            disabled={newCatLoading}
-                            className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold py-3 px-4 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10 cursor-pointer mt-2"
-                          >
-                            {newCatLoading ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Plus className="w-4 h-4 stroke-[3px]" />
-                            )}
-                            Crear Categoría Personalizada
-                          </button>
-                        </form>
+                    {/* ENCABEZADO DE SECCIÓN CON BOTÓN REGISTRAR */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/40 border border-white/5 rounded-2xl p-5 shadow-lg">
+                      <div>
+                        <h3 className="text-sm font-black text-white tracking-wider uppercase flex items-center gap-2">
+                          <PlusCircle className="w-4 h-4 text-emerald-400" />
+                          Gestor de Categorías
+                        </h3>
+                        <p className="text-[11px] text-slate-400 mt-1">Crea y personaliza las categorías para clasificar tus movimientos de ingresos y gastos.</p>
                       </div>
+
+                      <button
+                        onClick={() => setIsAddCategoryModalOpen(true)}
+                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-slate-950 text-xs font-extrabold px-5 py-3 rounded-xl shadow-lg hover:shadow-emerald-500/15 cursor-pointer flex items-center justify-center gap-2 transition-all shrink-0"
+                      >
+                        <Plus className="w-4 h-4 text-slate-950 stroke-[3px]" />
+                        Nueva Categoría
+                      </button>
                     </div>
 
                     {/* COLUMNA DERECHA: EXPLORADOR DE CATEGORÍAS */}
-                    <div className="lg:col-span-7 flex flex-col gap-6">
+                    <div className="flex flex-col gap-6">
                       {/* CATEGORÍAS DE EGRESOS / GASTOS */}
                       <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
                         <div className="flex justify-between items-center border-b border-white/5 pb-3">
@@ -6269,97 +6194,29 @@ export class DashboardComponent {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.15 }}
-                    className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+                    className="flex flex-col gap-6 w-full"
                   >
-                    {/* COLUMNA IZQUIERDA: CREAR PRESUPUESTO */}
-                    <div className="lg:col-span-5 flex flex-col gap-4">
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col gap-4">
-                        <div className="absolute top-[-10%] right-[-10%] w-[120px] h-[120px] bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
-                        
-                        <div>
-                          <h3 className="font-extrabold text-white text-base tracking-tight flex items-center gap-2">
-                            <PlusCircle className="w-5 h-5 text-emerald-400" />
-                            Nuevo Presupuesto
-                          </h3>
-                          <p className="text-xs text-slate-400 mt-1">Asigna un límite de gastos mensual a tus categorías para controlar tus finanzas.</p>
-                        </div>
-
-                        <form onSubmit={handleCreateBudget} className="flex flex-col gap-4 mt-2">
-                          {/* Categoría */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Categoría de Gasto</label>
-                            <select
-                              required
-                              value={newBudgetCategory}
-                              onChange={(e) => setNewBudgetCategory(e.target.value)}
-                              className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
-                            >
-                              <option value="" className="text-slate-500">-- Selecciona una Categoría --</option>
-                              {categories.expense.map((catStr) => (
-                                <option key={catStr} value={catStr} className="text-slate-950">
-                                  {catStr}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          {/* Límite Máximo */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Monto Máximo Mensual ($)</label>
-                            <div className="relative">
-                              <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
-                              <input
-                                type="number"
-                                required
-                                min="1"
-                                placeholder="Ej: 900000"
-                                value={newBudgetLimit}
-                                onChange={(e) => setNewBudgetLimit(e.target.value)}
-                                className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Límite de Alerta (%) */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Porcentaje de Alerta Previa (%)</label>
-                            <div className="relative">
-                              <input
-                                type="number"
-                                required
-                                min="50"
-                                max="100"
-                                placeholder="Ej: 95"
-                                value={newBudgetAlertThreshold}
-                                onChange={(e) => setNewBudgetAlertThreshold(e.target.value)}
-                                className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                              />
-                              <span className="absolute right-3.5 top-2.5 text-slate-500 text-xs font-bold">%</span>
-                            </div>
-                            <p className="text-[10px] text-slate-500 mt-1.5 leading-relaxed">
-                              Cuando tus gastos alcancen este porcentaje, el presupuesto se pintará de <span className="text-yellow-400 font-bold">amarillo</span> para avisarte.
-                            </p>
-                          </div>
-
-                          {/* Botón de envío */}
-                          <button
-                            type="submit"
-                            disabled={newBudgetLoading}
-                            className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold py-3 px-4 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10 cursor-pointer mt-2"
-                          >
-                            {newBudgetLoading ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Plus className="w-4 h-4 stroke-[3px]" />
-                            )}
-                            Crear Control de Presupuesto
-                          </button>
-                        </form>
+                    {/* ENCABEZADO DE SECCIÓN CON BOTÓN REGISTRAR */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/40 border border-white/5 rounded-2xl p-5 shadow-lg">
+                      <div>
+                        <h3 className="text-sm font-black text-white tracking-wider uppercase flex items-center gap-2">
+                          <PlusCircle className="w-4 h-4 text-emerald-400" />
+                          Control de Presupuestos
+                        </h3>
+                        <p className="text-[11px] text-slate-400 mt-1">Asigna límites de gastos mensuales a tus categorías para controlar tus finanzas de manera estricta.</p>
                       </div>
+
+                      <button
+                        onClick={() => setIsAddBudgetModalOpen(true)}
+                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-slate-950 text-xs font-extrabold px-5 py-3 rounded-xl shadow-lg hover:shadow-emerald-500/15 cursor-pointer flex items-center justify-center gap-2 transition-all shrink-0"
+                      >
+                        <Plus className="w-4 h-4 text-slate-950 stroke-[3px]" />
+                        Nuevo Presupuesto
+                      </button>
                     </div>
 
                     {/* COLUMNA DERECHA: MONITOREO DE PRESUPUESTOS EN TIEMPO REAL */}
-                    <div className="lg:col-span-7 flex flex-col gap-6">
+                    <div className="flex flex-col gap-6">
                       <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
                         <div className="flex justify-between items-center border-b border-white/5 pb-3">
                           <h4 className="font-extrabold text-white text-xs tracking-wider uppercase flex items-center gap-2">
@@ -6490,117 +6347,29 @@ export class DashboardComponent {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.15 }}
-                    className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+                    className="flex flex-col gap-6 w-full"
                   >
-                    {/* COLUMNA IZQUIERDA: CREAR META */}
-                    <div className="lg:col-span-5 flex flex-col gap-4">
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col gap-4">
-                        <div className="absolute top-[-10%] right-[-10%] w-[120px] h-[120px] bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
-                        
-                        <div>
-                          <h3 className="font-extrabold text-white text-base tracking-tight flex items-center gap-2">
-                            <PlusCircle className="w-5 h-5 text-emerald-400" />
-                            Nueva Meta de Ahorro
-                          </h3>
-                          <p className="text-xs text-slate-400 mt-1">Define tus metas de ahorro (viajes, tecnología, fondos de emergencia) y sigue tu progreso.</p>
-                        </div>
-
-                        <form onSubmit={handleCreateSavingsGoal} className="flex flex-col gap-4 mt-2">
-                          {/* Nombre de la Meta */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre de la Meta</label>
-                            <input
-                              type="text"
-                              required
-                              placeholder="Ej: Viaje Japón, Emergencias, Carro Nuevo"
-                              value={newGoalName}
-                              onChange={(e) => setNewGoalName(e.target.value)}
-                              className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                            />
-                          </div>
-
-                          {/* Monto Meta */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Monto Meta ($)</label>
-                            <div className="relative">
-                              <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
-                              <input
-                                type="number"
-                                required
-                                min="1"
-                                placeholder="Ej: 15000000"
-                                value={newGoalTarget}
-                                onChange={(e) => setNewGoalTarget(e.target.value)}
-                                className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Monto Ahorrado Inicial */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Monto Ahorrado Inicial ($)</label>
-                            <div className="relative">
-                              <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
-                              <input
-                                type="number"
-                                min="0"
-                                placeholder="Ej: 8300000 (Dejar en 0 si empiezas desde cero)"
-                                value={newGoalSaved}
-                                onChange={(e) => setNewGoalSaved(e.target.value)}
-                                className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Selector de Emoji */}
-                          <div>
-                            <div className="flex justify-between items-center mb-1.5">
-                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Emoji Icono</label>
-                              <span className="text-[10px] font-mono text-slate-500">Seleccionado: {newGoalEmoji}</span>
-                            </div>
-                            
-                            {/* Grid de Emojis de Ahorro */}
-                            <div className="bg-slate-950/30 border border-white/5 rounded-xl p-3 flex flex-col gap-3">
-                              <div className="grid grid-cols-8 gap-1.5 max-h-[100px] overflow-y-auto pr-1">
-                                {[
-                                  '💰', '✈️', '🚨', '🏠', '🚗', '🎓', '💻', '🎮',
-                                  '📈', '🏖️', '🎒', '🏍️', '💍', '👶', '🐶', '🍕',
-                                  '📱', '🚲', '🛹', '🏕️', '🏡', '🏥', '🎸', '🎁'
-                                ].map((em) => (
-                                  <button
-                                    key={em}
-                                    type="button"
-                                    onClick={() => setNewGoalEmoji(em)}
-                                    className={`aspect-square flex items-center justify-center rounded-lg text-base hover:bg-white/10 transition-all cursor-pointer ${
-                                      newGoalEmoji === em ? 'bg-emerald-500/20 border border-emerald-500/40 scale-110' : 'bg-transparent border-transparent'
-                                    }`}
-                                  >
-                                    {em}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Botón de envío */}
-                          <button
-                            type="submit"
-                            disabled={newGoalLoading}
-                            className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold py-3 px-4 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10 cursor-pointer mt-2"
-                          >
-                            {newGoalLoading ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Plus className="w-4 h-4 stroke-[3px]" />
-                            )}
-                            Crear Meta de Ahorro
-                          </button>
-                        </form>
+                    {/* ENCABEZADO DE SECCIÓN CON BOTÓN REGISTRAR */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/40 border border-white/5 rounded-2xl p-5 shadow-lg">
+                      <div>
+                        <h3 className="text-sm font-black text-white tracking-wider uppercase flex items-center gap-2">
+                          <PlusCircle className="w-4 h-4 text-emerald-400" />
+                          Metas de Ahorro
+                        </h3>
+                        <p className="text-[11px] text-slate-400 mt-1">Define tus objetivos de ahorro (viajes, fondos de emergencia) y realiza un seguimiento automático.</p>
                       </div>
+
+                      <button
+                        onClick={() => setIsAddGoalModalOpen(true)}
+                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-slate-950 text-xs font-extrabold px-5 py-3 rounded-xl shadow-lg hover:shadow-emerald-500/15 cursor-pointer flex items-center justify-center gap-2 transition-all shrink-0"
+                      >
+                        <Plus className="w-4 h-4 text-slate-950 stroke-[3px]" />
+                        Nueva Meta
+                      </button>
                     </div>
 
                     {/* COLUMNA DERECHA: SEGUIMIENTO DE METAS EN TIEMPO REAL */}
-                    <div className="lg:col-span-7 flex flex-col gap-6">
+                    <div className="flex flex-col gap-6 w-full">
                       <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
                         <div className="flex justify-between items-center border-b border-white/5 pb-3">
                           <h4 className="font-extrabold text-white text-xs tracking-wider uppercase flex items-center gap-2">
@@ -6698,9 +6467,10 @@ export class DashboardComponent {
                                         <div className="relative flex-1">
                                           <span className="absolute left-3 top-2 text-slate-500 text-xs font-bold">$</span>
                                           <input
-                                            type="number"
+                                            type="text"
+                                            inputMode="numeric"
                                             value={editingGoalSaved}
-                                            onChange={(e) => setNewGoalSaved(e.target.value)}
+                                            onChange={(e) => setEditingGoalSaved(formatNumberMask(e.target.value))}
                                             className="w-full bg-slate-900 border border-white/10 rounded-lg py-1.5 pl-7 pr-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                             placeholder="Nueva cantidad"
                                           />
@@ -6767,109 +6537,27 @@ export class DashboardComponent {
                     transition={{ duration: 0.25 }}
                     className="p-6 flex flex-col gap-6"
                   >
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-                      {/* COLUMNA FORMULARIO: REGISTRO DE NUEVA OBLIGACIÓN */}
-                      <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5 flex flex-col gap-4">
-                        <div className="flex items-center gap-2.5 pb-3 border-b border-white/5">
-                          <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-xl">
-                            <CreditCard className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h3 className="text-sm font-bold text-white tracking-wide">Nueva Obligación</h3>
-                            <p className="text-[10px] text-slate-400 mt-0.5">Registra una tarjeta o préstamo</p>
-                          </div>
-                        </div>
-
-                        <form onSubmit={handleCreateDebt} className="flex flex-col gap-4 mt-2">
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-[11px] font-bold text-slate-300">Nombre de la deuda</label>
-                            <input
-                              type="text"
-                              required
-                              placeholder="Ej. Visa, Préstamo Banco"
-                              value={newDebtName}
-                              onChange={(e) => setNewDebtName(e.target.value)}
-                              className="w-full bg-slate-950/80 border border-white/10 rounded-xl py-2 px-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                            />
-                          </div>
-
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-[11px] font-bold text-slate-300">Saldo pendiente</label>
-                            <div className="relative font-sans">
-                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">$</span>
-                              <input
-                                type="number"
-                                required
-                                min="1"
-                                placeholder="0"
-                                value={newDebtBalance}
-                                onChange={(e) => setNewDebtBalance(e.target.value)}
-                                className="w-full bg-slate-950/80 border border-white/10 rounded-xl py-2 pl-7 pr-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-[11px] font-bold text-slate-300">Pago mínimo o cuota mensual</label>
-                            <div className="relative font-sans">
-                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">$</span>
-                              <input
-                                type="number"
-                                required
-                                min="1"
-                                placeholder="0"
-                                value={newDebtMinPayment}
-                                onChange={(e) => setNewDebtMinPayment(e.target.value)}
-                                className="w-full bg-slate-950/80 border border-white/10 rounded-xl py-2 pl-7 pr-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-[11px] font-bold text-slate-300">Tipo de deuda</label>
-                              <select
-                                value={newDebtType}
-                                onChange={(e) => setNewDebtType(e.target.value as 'card' | 'loan' | 'other')}
-                                className="w-full bg-slate-950/80 border border-white/10 rounded-xl py-2 px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                              >
-                                <option value="card">💳 Tarjeta</option>
-                                <option value="loan">🏢 Préstamo</option>
-                                <option value="other">📄 Otro pasivo</option>
-                              </select>
-                            </div>
-
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-[11px] font-bold text-slate-300">Próximo vencimiento</label>
-                              <input
-                                type="date"
-                                required
-                                value={newDebtDueDate}
-                                onChange={(e) => setNewDebtDueDate(e.target.value)}
-                                className="w-full bg-slate-950/80 border border-white/10 rounded-xl py-1.5 px-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                              />
-                            </div>
-                          </div>
-
-                          <button
-                            type="submit"
-                            disabled={newDebtLoading}
-                            className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-500/10 mt-2"
-                          >
-                            {newDebtLoading ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <>
-                                <Plus className="w-4 h-4" />
-                                Agregar Obligación
-                              </>
-                            )}
-                          </button>
-                        </form>
+                    {/* ENCABEZADO DE SECCIÓN CON BOTÓN REGISTRAR */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/40 border border-white/5 rounded-2xl p-5 shadow-lg">
+                      <div>
+                        <h3 className="text-sm font-black text-white tracking-wider uppercase flex items-center gap-2">
+                          <CreditCard className="w-4 h-4 text-emerald-400" />
+                          Control de Deudas y Obligaciones
+                        </h3>
+                        <p className="text-[11px] text-slate-400 mt-1">Registra préstamos, hipotecas o tarjetas de crédito para monitorear saldos pendientes y cuotas mínimas.</p>
                       </div>
 
-                      {/* LISTADO DE DEUDAS REGISTRADAS */}
-                      <div className="lg:col-span-2 flex flex-col gap-4">
+                      <button
+                        onClick={() => setIsAddDebtModalOpen(true)}
+                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-slate-950 text-xs font-extrabold px-5 py-3 rounded-xl shadow-lg hover:shadow-emerald-500/15 cursor-pointer flex items-center justify-center gap-2 transition-all shrink-0"
+                      >
+                        <Plus className="w-4 h-4 text-slate-950 stroke-[3px]" />
+                        Nueva Obligación
+                      </button>
+                    </div>
+
+                    {/* LISTADO DE DEUDAS REGISTRADAS */}
+                    <div className="flex flex-col gap-4 w-full">
                         <div className="flex justify-between items-center pb-2">
                           <div>
                             <h3 className="text-sm font-bold text-white tracking-wide">Tus Obligaciones Financieras</h3>
@@ -7002,9 +6690,10 @@ export class DashboardComponent {
                                           <div className="relative font-sans">
                                             <span className="absolute left-2.5 top-1.5 text-slate-500 text-[10px] font-bold">$</span>
                                             <input
-                                              type="number"
+                                              type="text"
+                                              inputMode="numeric"
                                               value={editingDebtBalance}
-                                              onChange={(e) => setEditingDebtBalance(e.target.value)}
+                                              onChange={(e) => setEditingDebtBalance(formatNumberMask(e.target.value))}
                                               className="w-full bg-slate-900 border border-white/10 rounded-lg py-1 pl-6 pr-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                             />
                                           </div>
@@ -7015,9 +6704,10 @@ export class DashboardComponent {
                                           <div className="relative font-sans">
                                             <span className="absolute left-2.5 top-1.5 text-slate-500 text-[10px] font-bold">$</span>
                                             <input
-                                              type="number"
+                                              type="text"
+                                              inputMode="numeric"
                                               value={editingDebtMinPayment}
-                                              onChange={(e) => setEditingDebtMinPayment(e.target.value)}
+                                              onChange={(e) => setEditingDebtMinPayment(formatNumberMask(e.target.value))}
                                               className="w-full bg-slate-900 border border-white/10 rounded-lg py-1 pl-6 pr-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                             />
                                           </div>
@@ -7071,7 +6761,6 @@ export class DashboardComponent {
                           </div>
                         )}
                       </div>
-                    </div>
                   </motion.div>
                 )}
 
@@ -7224,12 +6913,12 @@ export class DashboardComponent {
                         <div className="relative">
                           <span className="absolute left-3 top-2 text-slate-500 text-xs font-bold">$</span>
                           <input 
-                            type="number"
-                            step="0.01"
+                            type="text"
+                            inputMode="numeric"
                             required
-                            placeholder="0.00"
+                            placeholder="0"
                             value={newTxAmount}
-                            onChange={(e) => setNewTxAmount(e.target.value)}
+                            onChange={(e) => setNewTxAmount(formatNumberMask(e.target.value))}
                             className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-2 pl-7 pr-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
                           />
                         </div>
@@ -7299,7 +6988,7 @@ export class DashboardComponent {
                                 const file = e.target.files?.[0];
                                 if (file) {
                                   if (file.size > 2 * 1024 * 1024) {
-                                    alert('La imagen es demasiado grande. Por favor, suba un archivo menor a 2MB.');
+                                    toast.error('La imagen es demasiado grande. Por favor, suba un archivo menor a 2MB.');
                                     return;
                                   }
                                   const reader = new FileReader();
@@ -7372,6 +7061,902 @@ export class DashboardComponent {
                   >
                     Cerrar Vista de Factura
                   </button>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* MODAL NUEVA SUSCRIPCIÓN */}
+          <AnimatePresence>
+            {isAddSubModalOpen && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Encabezado */}
+                  <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-900/40">
+                    <div>
+                      <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                        <Tv className="w-4 h-4 text-emerald-400" />
+                        Nueva Suscripción
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">Registra tus plataformas de streaming o servicios mensuales fijos.</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddSubModalOpen(false)}
+                      className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Formulario */}
+                  <form onSubmit={handleCreateSubscription} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                    {/* Nombre */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre del Servicio</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ej: Netflix, Spotify, AWS"
+                        value={newSubName}
+                        onChange={(e) => setNewSubName(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    {/* Costo */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Costo Mensual ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          required
+                          placeholder="Ej: 44.900"
+                          value={newSubCost}
+                          onChange={(e) => setNewSubCost(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Fecha de Vencimiento */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Próximo Cobro / Fecha</label>
+                      <input
+                        type="date"
+                        required
+                        value={newSubDueDate}
+                        onChange={(e) => setNewSubDueDate(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    {/* Cuenta Vinculada */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Cuenta o Tarjeta Vinculada</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Bancolombia, Visa, Tarjeta Digital"
+                        value={newSubAccount}
+                        onChange={(e) => setNewSubAccount(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    {/* Estado */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Estado Inicial</label>
+                      <select
+                        value={newSubStatus}
+                        onChange={(e) => setNewSubStatus(e.target.value as 'active' | 'paused')}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                      >
+                        <option value="active">🟢 Activo (Cobro Automático)</option>
+                        <option value="paused">⏸️ Pausado / Suspendido</option>
+                      </select>
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddSubModalOpen(false)}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={newSubLoading}
+                        className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                      >
+                        {newSubLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4 stroke-[3px]" />
+                        )}
+                        Agregar Suscripción
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* MODAL NUEVA CUENTA */}
+          <AnimatePresence>
+            {showNewAccountModal && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Encabezado */}
+                  <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-900/40">
+                    <div>
+                      <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                        <Wallet className="w-4 h-4 text-emerald-400" />
+                        Nueva Cuenta Financiera
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">Crea una cuenta para realizar transacciones e ingresos/gastos.</p>
+                    </div>
+                    <button
+                      onClick={() => setShowNewAccountModal(false)}
+                      className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Formulario */}
+                  <form onSubmit={handleCreateAccount} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                    {/* Nombre */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre de la Cuenta</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ej: Bancolombia Ahorros, Efectivo, Tarjeta Crédito Visa"
+                        value={newAccountName}
+                        onChange={(e) => setNewAccountName(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    {/* Tipo y Subtipo */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Naturaleza de Cuenta</label>
+                        <select
+                          value={newAccountType}
+                          onChange={(e) => setNewAccountType(e.target.value as 'credito' | 'deuda')}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                        >
+                          <option value="credito">🏦 Activo / Crédito (Dinero tuyo)</option>
+                          <option value="deuda">💳 Pasivo / Deuda (Tarjeta de crédito)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Subtipo</label>
+                        <select
+                          value={newAccountSubtipo}
+                          onChange={(e) => setNewAccountSubtipo(e.target.value as 'disponible' | 'ahorros' | 'deudas')}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                        >
+                          <option value="disponible">💵 Disponible / Efectivo</option>
+                          <option value="ahorros">🐖 Ahorro Inversión</option>
+                          <option value="deudas">💳 Tarjeta de Crédito / Préstamo</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Balance Inicial */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Saldo Inicial ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="Ej: 3.500.000"
+                          value={newAccountBalance}
+                          onChange={(e) => setNewAccountBalance(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Selector de Color */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Color Temático</label>
+                      <div className="flex gap-2.5 flex-wrap">
+                        {['emerald', 'blue', 'purple', 'amber', 'rose', 'indigo', 'orange'].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setNewAccountColor(c)}
+                            className={`w-6 h-6 rounded-full border transition-all ${
+                              newAccountColor === c ? 'ring-2 ring-emerald-500 scale-110' : 'opacity-80'
+                            }`}
+                            style={{ backgroundColor: c === 'emerald' ? '#10b981' : c === 'blue' ? '#3b82f6' : c === 'purple' ? '#a855f7' : c === 'amber' ? '#f59e0b' : c === 'rose' ? '#f43f5e' : c === 'indigo' ? '#6366f1' : '#f97316' }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setShowNewAccountModal(false)}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={newAccountLoading}
+                        className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                      >
+                        {newAccountLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4 stroke-[3px]" />
+                        )}
+                        Crear Cuenta
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* MODAL TRANSACCIÓN DIRECTA CUENTAS */}
+          <AnimatePresence>
+            {showAddAccountTxModal && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Encabezado */}
+                  <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-900/40">
+                    <div>
+                      <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                        <ArrowLeftRight className="w-4 h-4 text-emerald-400" />
+                        Transacción Directa
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Registra un depósito o retiro directo sobre la cuenta: {' '}
+                        <span className="font-bold text-white">
+                          {accounts.find(a => a.id === selectedAccountId)?.nombre}
+                        </span>
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setShowAddAccountTxModal(false)}
+                      className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Formulario */}
+                  <form onSubmit={handleAccountTransaction} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                    {/* Tipo de transacción */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Tipo</label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setActTxType('income')}
+                          className={`py-3.5 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer border ${
+                            actTxType === 'income'
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                              : 'bg-slate-950/40 border-white/5 text-slate-400 hover:bg-slate-950/60'
+                          }`}
+                        >
+                          🟢 Depósito / Ingreso
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActTxType('expense')}
+                          className={`py-3.5 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer border ${
+                            actTxType === 'expense'
+                              ? 'bg-red-500/20 text-red-400 border-red-500/40'
+                              : 'bg-slate-950/40 border-white/5 text-slate-400 hover:bg-slate-950/60'
+                          }`}
+                        >
+                          🔴 Retiro / Gasto
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Monto */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Monto ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          required
+                          placeholder="Ej: 15.000"
+                          value={actTxAmount}
+                          onChange={(e) => setActTxAmount(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Categoría */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Categoría</label>
+                      <select
+                        value={actTxCategory}
+                        onChange={(e) => setActTxCategory(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                      >
+                        {dbCategories.map((c) => (
+                          <option key={c.id} value={c.name}>
+                            {c.emoji} {c.name}
+                          </option>
+                        ))}
+                        {/* Opciones por defecto si no hay personalizadas */}
+                        {dbCategories.length === 0 && (
+                          <>
+                            <option value="Sueldo">💵 Sueldo</option>
+                            <option value="Inversiones">📈 Inversiones</option>
+                            <option value="Alimentación">🍔 Alimentación</option>
+                            <option value="Transporte">🚗 Transporte</option>
+                            <option value="Hogar">🏠 Hogar</option>
+                            <option value="Entretenimiento">🎮 Entretenimiento</option>
+                          </>
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Descripción */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Descripción / Detalle</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Pago de almuerzo, Depósito de nómina"
+                        value={actTxDescription}
+                        onChange={(e) => setActTxDescription(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setShowAddAccountTxModal(false)}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={actTxLoading}
+                        className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                      >
+                        {actTxLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4 stroke-[3px]" />
+                        )}
+                        Registrar Transacción
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* MODAL NUEVA CATEGORÍA */}
+          <AnimatePresence>
+            {isAddCategoryModalOpen && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Encabezado */}
+                  <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-900/40">
+                    <div>
+                      <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                        <PlusCircle className="w-4 h-4 text-emerald-400" />
+                        Nueva Categoría Personalizada
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">Agrega categorías específicas para tus transacciones.</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddCategoryModalOpen(false)}
+                      className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Formulario */}
+                  <form onSubmit={handleCreateCategory} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                    {/* Nombre */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre de la Categoría</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ej: Mascotas, Sushi, Streaming"
+                        value={newCatName}
+                        onChange={(e) => setNewCatName(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    {/* Tipo */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Tipo de Flujo</label>
+                      <select
+                        value={newCatType}
+                        onChange={(e) => setNewCatType(e.target.value as 'income' | 'expense')}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                      >
+                        <option value="expense">🔴 Categoría de Gastos</option>
+                        <option value="income">🟢 Categoría de Ingresos</option>
+                      </select>
+                    </div>
+
+                    {/* Selector de Emoji Icono */}
+                    <div>
+                      <div className="flex justify-between items-center mb-1.5">
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Emoji Icono</label>
+                        <span className="text-[10px] font-mono text-slate-500">Seleccionado: {newCatEmoji}</span>
+                      </div>
+                      <div className="bg-slate-950/30 border border-white/5 rounded-xl p-3 max-h-[120px] overflow-y-auto pr-1">
+                        <div className="grid grid-cols-8 gap-1.5">
+                          {[
+                            '🍕', '🍿', '🎸', '🎮', '💡', '🏋️', '📚', '👗', '🎨', '🚕', '🏥', '🥕', '🥩', '🍩', '🥑', '🧁', '🍦', '🍹', '✈️', '🏝️', '🏕️', '🏡', '💻', '💸', '💼', '🛒', '🐾', '💈', '🎬', '🚲', '⚽', '🔑'
+                          ].map((em) => (
+                            <button
+                              key={em}
+                              type="button"
+                              onClick={() => setNewCatEmoji(em)}
+                              className={`aspect-square flex items-center justify-center rounded-lg text-base hover:bg-white/10 transition-all cursor-pointer ${
+                                newCatEmoji === em ? 'bg-emerald-500/20 border border-emerald-500/40 scale-110' : 'bg-transparent border-transparent'
+                              }`}
+                            >
+                              {em}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddCategoryModalOpen(false)}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={newCatLoading}
+                        className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                      >
+                        {newCatLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4 stroke-[3px]" />
+                        )}
+                        Crear Categoría
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* MODAL NUEVO PRESUPUESTO */}
+          <AnimatePresence>
+            {isAddBudgetModalOpen && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Encabezado */}
+                  <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-900/40">
+                    <div>
+                      <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                        <PlusCircle className="w-4 h-4 text-emerald-400" />
+                        Establecer Presupuesto Mensual
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">Limita tu gasto mensual por categoría para mantener tus finanzas bajo control.</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddBudgetModalOpen(false)}
+                      className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Formulario */}
+                  <form onSubmit={handleCreateBudget} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                    {/* Categoría */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Categoría para Limitar</label>
+                      <select
+                        value={newBudgetCategory}
+                        onChange={(e) => setNewBudgetCategory(e.target.value)}
+                        required
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                      >
+                        <option value="">-- Seleccionar Categoría --</option>
+                        {dbCategories.filter(c => c.type === 'expense').map((c) => (
+                          <option key={c.id} value={c.name}>
+                            {c.emoji} {c.name}
+                          </option>
+                        ))}
+                        {/* Categorías por defecto si no hay en db */}
+                        <option value="🍔 Alimentación">🍔 Alimentación</option>
+                        <option value="🚗 Transporte">🚗 Transporte</option>
+                        <option value="🏠 Hogar">🏠 Hogar</option>
+                        <option value="🎮 Entretenimiento">🎮 Entretenimiento</option>
+                        <option value="🩺 Salud">🩺 Salud</option>
+                        <option value="🛍️ Compras">🛍️ Compras</option>
+                      </select>
+                    </div>
+
+                    {/* Límite máximo */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Límite Máximo Mensual ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          required
+                          placeholder="Ej: 500.000"
+                          value={newBudgetLimit}
+                          onChange={(e) => setNewBudgetLimit(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Alertas */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Notificación de Alerta (%)</label>
+                      <select
+                        value={newBudgetAlertThreshold}
+                        onChange={(e) => setNewBudgetAlertThreshold(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                      >
+                        <option value="50">⚠️ Alerta al 50% de consumo</option>
+                        <option value="80">⚠️ Alerta al 80% de consumo</option>
+                        <option value="90">⚠️ Alerta al 90% de consumo</option>
+                        <option value="95">⚠️ Alerta al 95% de consumo</option>
+                        <option value="100">🚫 Sin alerta anticipada (Solo al exceder)</option>
+                      </select>
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddBudgetModalOpen(false)}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={newBudgetLoading}
+                        className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                      >
+                        {newBudgetLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4 stroke-[3px]" />
+                        )}
+                        Crear Presupuesto
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* MODAL NUEVA META DE AHORRO */}
+          <AnimatePresence>
+            {isAddGoalModalOpen && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Encabezado */}
+                  <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-900/40">
+                    <div>
+                      <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                        <PlusCircle className="w-4 h-4 text-emerald-400" />
+                        Nueva Meta de Ahorro
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">Sigue tu progreso hacia compras grandes, viajes o fondos de emergencia.</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddGoalModalOpen(false)}
+                      className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Formulario */}
+                  <form onSubmit={handleCreateSavingsGoal} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                    {/* Nombre */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre de la Meta</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ej: Viaje Japón, Computador Nuevo, Emergencias"
+                        value={newGoalName}
+                        onChange={(e) => setNewGoalName(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    {/* Monto Objetivo */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Monto Meta ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          required
+                          placeholder="Ej: 15.000.000"
+                          value={newGoalTarget}
+                          onChange={(e) => setNewGoalTarget(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Ahorro Inicial */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Monto Ahorrado Inicial ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="Ej: 500.000 (Dejar vacío si empiezas de cero)"
+                          value={newGoalSaved}
+                          onChange={(e) => setNewGoalSaved(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Selector de Emoji Icono */}
+                    <div>
+                      <div className="flex justify-between items-center mb-1.5">
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Emoji Icono</label>
+                        <span className="text-[10px] font-mono text-slate-500">Seleccionado: {newGoalEmoji}</span>
+                      </div>
+                      <div className="bg-slate-950/30 border border-white/5 rounded-xl p-3 max-h-[120px] overflow-y-auto pr-1">
+                        <div className="grid grid-cols-8 gap-1.5">
+                          {[
+                            '💰', '✈️', '🚨', '🏠', '🚗', '🎓', '💻', '🎮',
+                            '📈', '🏖️', '🎒', '🎒', '💍', '👶', '🐶', '🍕',
+                            '📱', '🚲', '🛹', '🏕️', '🏡', '🏥', '🎸', '🎁'
+                          ].map((em) => (
+                            <button
+                              key={em}
+                              type="button"
+                              onClick={() => setNewGoalEmoji(em)}
+                              className={`aspect-square flex items-center justify-center rounded-lg text-base hover:bg-white/10 transition-all cursor-pointer ${
+                                newGoalEmoji === em ? 'bg-emerald-500/20 border border-emerald-500/40 scale-110' : 'bg-transparent border-transparent'
+                              }`}
+                            >
+                              {em}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddGoalModalOpen(false)}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={newGoalLoading}
+                        className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                      >
+                        {newGoalLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4 stroke-[3px]" />
+                        )}
+                        Crear Meta
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* MODAL NUEVA OBLIGACIÓN / DEUDA */}
+          <AnimatePresence>
+            {isAddDebtModalOpen && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Encabezado */}
+                  <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-900/40">
+                    <div>
+                      <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                        <CreditCard className="w-4 h-4 text-emerald-400" />
+                        Nueva Obligación Financiera
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">Registra tarjetas de crédito o préstamos para controlar sus cuotas y vencimientos.</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddDebtModalOpen(false)}
+                      className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Formulario */}
+                  <form onSubmit={handleCreateDebt} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                    {/* Nombre */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre de la Deuda</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ej: Tarjeta Visa, Crédito Libre Inversión"
+                        value={newDebtName}
+                        onChange={(e) => setNewDebtName(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    {/* Saldo Pendiente */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Saldo Pendiente ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          required
+                          placeholder="Ej: 2.300.000"
+                          value={newDebtBalance}
+                          onChange={(e) => setNewDebtBalance(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Pago mínimo / Cuota mensual */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Pago Mínimo o Cuota Mensual ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          required
+                          placeholder="Ej: 120.000"
+                          value={newDebtMinPayment}
+                          onChange={(e) => setNewDebtMinPayment(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Tipo y Fecha de Vencimiento */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Tipo de Deuda</label>
+                        <select
+                          value={newDebtType}
+                          onChange={(e) => setNewDebtType(e.target.value as 'card' | 'loan' | 'other')}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                        >
+                          <option value="card">💳 Tarjeta de Crédito</option>
+                          <option value="loan">🏢 Préstamo Bancario / Cooperativa</option>
+                          <option value="other">📄 Otro Pasivo</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Próximo Vencimiento</label>
+                        <input
+                          type="date"
+                          required
+                          value={newDebtDueDate}
+                          onChange={(e) => setNewDebtDueDate(e.target.value)}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Acciones */}
+                    <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddDebtModalOpen(false)}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={newDebtLoading}
+                        className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                      >
+                        {newDebtLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4 stroke-[3px]" />
+                        )}
+                        Registrar Deuda
+                      </button>
+                    </div>
+                  </form>
                 </motion.div>
               </div>
             )}
