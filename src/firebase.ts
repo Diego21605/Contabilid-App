@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { toast } from 'react-hot-toast';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -34,8 +35,9 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -51,5 +53,11 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  
+  // Guard against infinite toast loops and only toast user-relevant errors
+  if (!errorMessage.includes('offline') && !errorMessage.includes('permission-denied') && !errorMessage.includes('Missing or insufficient permissions')) {
+    toast.error(`Error de base de datos (${operationType}): ${errorMessage.substring(0, 100)}`);
+  } else if (errorMessage.includes('permission-denied') || errorMessage.includes('Missing or insufficient permissions')) {
+    toast.error(`Acceso denegado a la ruta: ${path || 'Base de datos'}. Verifica tus permisos.`);
+  }
 }

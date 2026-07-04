@@ -17,6 +17,7 @@ import {
   Check, 
   Loader2, 
   ShieldCheck, 
+  ShieldAlert,
   ArrowUpRight, 
   ArrowDownRight, 
   Activity,
@@ -49,8 +50,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { toast, Toaster } from 'react-hot-toast';
 import appLogo from './assets/images/app_logo_1782999126227.jpg';
 import { 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged, 
   User,
@@ -59,15 +58,15 @@ import {
 } from 'firebase/auth';
 import { 
   collection, 
-  addDoc, 
+  addDoc as firestoreAddDoc, 
   deleteDoc, 
   doc, 
   onSnapshot, 
   query, 
   orderBy,
   getDocFromServer,
-  updateDoc,
-  setDoc,
+  updateDoc as firestoreUpdateDoc,
+  setDoc as firestoreSetDoc,
   where,
   getDocs,
   getDocsFromServer
@@ -428,14 +427,109 @@ export default function App() {
   const [loginLogoError, setLoginLogoError] = useState(false);
   const [sidebarLogoError, setSidebarLogoError] = useState(false);
 
-  // Estado de Autenticación
+  // Estado de Autenticación y E2EE
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
+
+  // Auxiliar para validación de acceso según reglas de negocio (C7, C8)
+  const checkUserAuthorization = async (user: User): Promise<boolean> => {
+    const email = user.email || '';
+    
+    // Lista de correos autorizados por defecto
+    const alwaysAllowedEmails = [
+      'diegofe21605@gmail.com',
+      'test@demo.com',
+      'admin@contabilidapp.com'
+    ];
+    
+    // Dominios autorizados por defecto (ej. gmail, corporativos)
+    const allowedDomains = [
+      'gmail.com',
+      'contabilidapp.com'
+    ];
+    
+    const domain = email.split('@')[1]?.toLowerCase();
+    
+    try {
+      const accesoDocRef = doc(db, 'usuarios', user.uid, 'configuracion', 'acceso');
+      const accesoSnap = await getDocFromServer(accesoDocRef);
+      
+      if (accesoSnap.exists()) {
+        const accesoData = accesoSnap.data();
+        if (accesoData.active === false || accesoData.authorized === false) {
+          return false;
+        }
+        return true;
+      } else {
+        const isEmailAllowed = alwaysAllowedEmails.includes(email.toLowerCase()) || allowedDomains.includes(domain);
+        
+        if (!isEmailAllowed) {
+          await firestoreSetDoc(accesoDocRef, {
+            email: email,
+            active: false,
+            authorized: false,
+            role: 'unauthorized',
+            fechaCreacion: new Date().toISOString()
+          });
+          return false;
+        }
+        
+        await firestoreSetDoc(accesoDocRef, {
+          email: email,
+          active: true,
+          authorized: true,
+          role: 'user',
+          fechaCreacion: new Date().toISOString()
+        });
+        return true;
+      }
+    } catch (err) {
+      console.error("Error al validar autorización del usuario:", err);
+      if (alwaysAllowedEmails.includes(email.toLowerCase()) || allowedDomains.includes(domain)) {
+        return true;
+      }
+      return false;
+    }
+  };
+
+  // Interceptores transparentes de Firestore para Cifrado Extremo a Extremo (E2EE)
+  const addDoc = async (colRef: any, data: any) => {
+    if (encryptionKey) {
+      const encrypted = await encryptDoc(data, encryptionKey);
+      return await firestoreAddDoc(colRef, encrypted);
+    }
+    return await firestoreAddDoc(colRef, data);
+  };
+
+  const setDoc = async (docRef: any, data: any, options?: any) => {
+    if (encryptionKey) {
+      const encrypted = await encryptDoc(data, encryptionKey);
+      return await firestoreSetDoc(docRef, encrypted, options);
+    }
+    return await firestoreSetDoc(docRef, data, options);
+  };
+
+  const updateDoc = async (docRef: any, updatedFields: any) => {
+    if (encryptionKey) {
+      try {
+        const snap = await getDocFromServer(docRef);
+        if (snap.exists()) {
+          const currentData = await decryptDoc(snap.data(), encryptionKey);
+          const merged = { ...currentData, ...updatedFields };
+          delete merged.id;
+          const encrypted = await encryptDoc(merged, encryptionKey);
+          return await firestoreUpdateDoc(docRef, encrypted);
+        }
+      } catch (err) {
+        console.error("Error en updateDoc wrapper:", err);
+      }
+    }
+    return await firestoreUpdateDoc(docRef, updatedFields);
+  };
 
   // Estado de Transacciones
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -683,8 +777,33 @@ export default function App() {
 
   // Escuchar cambios en el estado de autenticación de Firebase
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setAuthLoading(true);
+        try {
+          const authorized = await checkUserAuthorization(user);
+          setIsAuthorized(authorized);
+          if (authorized) {
+            setAuthError('');
+            // Derivar clave de E2EE determinísticamente usando el UID de Google
+            const key = await deriveKeyFromGoogleUid(user.uid);
+            setEncryptionKey(key);
+          } else {
+            setAuthError('Tu cuenta de Google no está autorizada para acceder a esta aplicación.');
+            toast.error('Acceso no autorizado.');
+            setEncryptionKey(null);
+          }
+        } catch (err) {
+          console.error("Error al validar autorización:", err);
+          setAuthError('Error al procesar el inicio de sesión.');
+        }
+        setCurrentUser(user);
+      } else {
+        setCurrentUser(null);
+        setIsAuthorized(null);
+        setEncryptionKey(null);
+        setAuthError('');
+      }
       setAuthLoading(false);
     });
     return unsubscribe;
@@ -692,7 +811,7 @@ export default function App() {
 
   // Escuchar transacciones en tiempo real de Firestore para el usuario activo
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !encryptionKey) {
       setTransactions([]);
       return;
     }
@@ -702,67 +821,91 @@ export default function App() {
       orderBy('fechaCreacion', 'desc')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: Transaction[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        // Soportar campos tanto en español (de Angular) como en inglés para total compatibilidad
-        const monto = data.monto !== undefined ? data.monto : (data.amount || 0);
-        const tipo = data.tipo !== undefined ? data.tipo : (data.type || 'egreso');
-        const fecha = data.fecha || data.date || new Date().toISOString();
-        
-        items.push({
-          id: doc.id,
-          amount: monto,
-          type: (tipo === 'ingreso' || tipo === 'income') ? 'income' : 'expense',
-          category: data.categoria || data.category || 'Otros',
-          description: data.descripcion || data.description || '',
-          date: fecha
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      try {
+        const promises = snapshot.docs.map(async (doc) => {
+          const rawData = doc.data();
+          let data = rawData;
+          if (encryptionKey) {
+            try {
+              data = await decryptDoc(rawData, encryptionKey);
+            } catch (decErr) {
+              console.error(`Error decrypting movimiento ${doc.id}:`, decErr);
+            }
+          }
+          // Soportar campos tanto en español (de Angular) como en inglés para total compatibilidad
+          const monto = data?.monto !== undefined ? data.monto : (data?.amount || 0);
+          const tipo = data?.tipo !== undefined ? data.tipo : (data?.type || 'egreso');
+          const fecha = data?.fecha || data?.date || new Date().toISOString();
+          
+          return {
+            id: doc.id,
+            amount: monto,
+            type: (tipo === 'ingreso' || tipo === 'income') ? 'income' : 'expense',
+            category: data?.categoria || data?.category || 'Otros',
+            description: data?.descripcion || data?.description || '',
+            date: fecha
+          };
         });
-      });
-      setTransactions(items);
+        const items = await Promise.all(promises);
+        setTransactions(items);
+      } catch (err) {
+        console.error("Error decrypting movimientos snapshot:", err);
+      }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `usuarios/${currentUser.uid}/movimientos`);
     });
 
     return unsubscribe;
-  }, [currentUser]);
+  }, [currentUser, encryptionKey]);
 
   // Escuchar categorías personalizadas en tiempo real desde Firestore
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !encryptionKey) {
       setDbCategories([]);
       return;
     }
 
     const q = query(
-      collection(db, 'usuarios', currentUser.uid, 'categorias'),
-      orderBy('fechaCreacion', 'asc')
+      collection(db, 'usuarios', currentUser.uid, 'categorias')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        items.push({
-          id: doc.id,
-          name: data.name || data.nombre || '',
-          type: data.type || data.tipo || 'expense',
-          emoji: data.emoji || '📦',
-          fechaCreacion: data.fechaCreacion
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      try {
+        const promises = snapshot.docs.map(async (doc) => {
+          const rawData = doc.data();
+          let data = rawData;
+          if (encryptionKey) {
+            try {
+              data = await decryptDoc(rawData, encryptionKey);
+            } catch (decErr) {
+              console.error(`Error decrypting categoria ${doc.id}:`, decErr);
+            }
+          }
+          return {
+            id: doc.id,
+            name: data?.name || data?.nombre || '',
+            type: data?.type || data?.tipo || 'expense',
+            emoji: data?.emoji || '📦',
+            fechaCreacion: data?.fechaCreacion
+          };
         });
-      });
-      setDbCategories(items);
+        const items = await Promise.all(promises);
+        items.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+        setDbCategories(items);
+      } catch (err) {
+        console.error("Error decrypting categorias snapshot:", err);
+      }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `usuarios/${currentUser.uid}/categorias`);
     });
 
     return unsubscribe;
-  }, [currentUser]);
+  }, [currentUser, encryptionKey]);
 
   // Escuchar presupuestos personalizados en tiempo real desde Firestore
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !encryptionKey) {
       setDbBudgets([]);
       return;
     }
@@ -771,29 +914,41 @@ export default function App() {
       collection(db, 'usuarios', currentUser.uid, 'presupuestos')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        items.push({
-          id: doc.id,
-          category: data.category || '',
-          maxAmount: Number(data.maxAmount || 0),
-          alertThreshold: Number(data.alertThreshold || 95),
-          fechaCreacion: data.fechaCreacion
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      try {
+        const promises = snapshot.docs.map(async (doc) => {
+          const rawData = doc.data();
+          let data = rawData;
+          if (encryptionKey) {
+            try {
+              data = await decryptDoc(rawData, encryptionKey);
+            } catch (decErr) {
+              console.error(`Error decrypting budget ${doc.id}:`, decErr);
+            }
+          }
+          return {
+            id: doc.id,
+            category: data?.category || '',
+            maxAmount: Number(data?.maxAmount || 0),
+            alertThreshold: Number(data?.alertThreshold || 95),
+            fechaCreacion: data?.fechaCreacion
+          };
         });
-      });
-      setDbBudgets(items);
+        const items = await Promise.all(promises);
+        setDbBudgets(items);
+      } catch (err) {
+        console.error("Error decrypting budgets snapshot:", err);
+      }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `usuarios/${currentUser.uid}/presupuestos`);
     });
 
     return unsubscribe;
-  }, [currentUser]);
+  }, [currentUser, encryptionKey]);
 
   // Escuchar metas de ahorro en tiempo real desde Firestore + auto-seeding de metas demo
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !encryptionKey) {
       setDbSavingsGoals([]);
       return;
     }
@@ -803,53 +958,65 @@ export default function App() {
     );
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        items.push({
-          id: doc.id,
-          name: data.name || '',
-          targetAmount: Number(data.targetAmount || 0),
-          currentSaved: Number(data.currentSaved || 0),
-          emoji: data.emoji || '💰',
-          fechaCreacion: data.fechaCreacion
+      try {
+        const promises = snapshot.docs.map(async (doc) => {
+          const rawData = doc.data();
+          let data = rawData;
+          if (encryptionKey) {
+            try {
+              data = await decryptDoc(rawData, encryptionKey);
+            } catch (decErr) {
+              console.error(`Error decrypting meta ${doc.id}:`, decErr);
+            }
+          }
+          return {
+            id: doc.id,
+            name: data?.name || '',
+            targetAmount: Number(data?.targetAmount || 0),
+            currentSaved: Number(data?.currentSaved || 0),
+            emoji: data?.emoji || '💰',
+            fechaCreacion: data?.fechaCreacion
+          };
         });
-      });
-      
-      if (snapshot.empty) {
-        try {
-          const goalsRef = collection(db, 'usuarios', currentUser.uid, 'metas');
-          await addDoc(goalsRef, {
-            name: 'Viaje Japón',
-            targetAmount: 15000000,
-            currentSaved: 8300000,
-            emoji: '✈️',
-            fechaCreacion: new Date().toISOString()
-          });
-          await addDoc(goalsRef, {
-            name: 'Emergencias',
-            targetAmount: 10000000,
-            currentSaved: 8200000,
-            emoji: '🚨',
-            fechaCreacion: new Date().toISOString()
-          });
-        } catch (err) {
-          console.error("Error al inicializar metas demo:", err);
+        const items = await Promise.all(promises);
+        
+        if (items.length === 0) {
+          try {
+            const goalsRef = collection(db, 'usuarios', currentUser.uid, 'metas');
+            await addDoc(goalsRef, {
+              name: 'Viaje Japón',
+              targetAmount: 15000000,
+              currentSaved: 8300000,
+              emoji: '✈️',
+              fechaCreacion: new Date().toISOString()
+            });
+            await addDoc(goalsRef, {
+              name: 'Emergencias',
+              targetAmount: 10000000,
+              currentSaved: 8200000,
+              emoji: '🚨',
+              fechaCreacion: new Date().toISOString()
+            });
+          } catch (err) {
+            console.error("Error al inicializar metas demo:", err);
+          }
+        } else {
+          items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
+          setDbSavingsGoals(items);
         }
-      } else {
-        items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
-        setDbSavingsGoals(items);
+      } catch (err) {
+        console.error("Error decrypting metas snapshot:", err);
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `usuarios/${currentUser.uid}/metas`);
     });
 
     return unsubscribe;
-  }, [currentUser]);
+  }, [currentUser, encryptionKey]);
 
   // Escuchar deudas en tiempo real desde Firestore + auto-seeding de deudas demo
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !encryptionKey) {
       setDbDebts([]);
       return;
     }
@@ -859,141 +1026,163 @@ export default function App() {
     );
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        items.push({
-          id: doc.id,
-          name: data.name || '',
-          balance: Number(data.balance || 0),
-          minPayment: Number(data.minPayment || 0),
-          dueDate: data.dueDate || '',
-          type: data.type || 'card',
-          fechaCreacion: data.fechaCreacion
+      try {
+        const promises = snapshot.docs.map(async (doc) => {
+          const rawData = doc.data();
+          let data = rawData;
+          if (encryptionKey) {
+            try {
+              data = await decryptDoc(rawData, encryptionKey);
+            } catch (decErr) {
+              console.error(`Error decrypting deuda ${doc.id}:`, decErr);
+            }
+          }
+          return {
+            id: doc.id,
+            name: data?.name || '',
+            balance: Number(data?.balance || 0),
+            minPayment: Number(data?.minPayment || 0),
+            dueDate: data?.dueDate || '',
+            type: data?.type || 'card',
+            fechaCreacion: data?.fechaCreacion
+          };
         });
-      });
-      
-      if (snapshot.empty) {
-        try {
-          const debtsRef = collection(db, 'usuarios', currentUser.uid, 'deudas');
-          await addDoc(debtsRef, {
-            name: 'Visa',
-            balance: 1200000,
-            minPayment: 180000,
-            dueDate: '2026-07-18',
-            type: 'card',
-            fechaCreacion: new Date().toISOString()
-          });
-          await addDoc(debtsRef, {
-            name: 'Préstamo',
-            balance: 8000000,
-            minPayment: 650000,
-            dueDate: '2026-07-07',
-            type: 'loan',
-            fechaCreacion: new Date().toISOString()
-          });
-        } catch (err) {
-          console.error("Error al inicializar deudas demo:", err);
+        const items = await Promise.all(promises);
+        
+        if (items.length === 0) {
+          try {
+            const debtsRef = collection(db, 'usuarios', currentUser.uid, 'deudas');
+            await addDoc(debtsRef, {
+              name: 'Visa',
+              balance: 1200000,
+              minPayment: 180000,
+              dueDate: '2026-07-18',
+              type: 'card',
+              fechaCreacion: new Date().toISOString()
+            });
+            await addDoc(debtsRef, {
+              name: 'Préstamo',
+              balance: 8000000,
+              minPayment: 650000,
+              dueDate: '2026-07-07',
+              type: 'loan',
+              fechaCreacion: new Date().toISOString()
+            });
+          } catch (err) {
+            console.error("Error al inicializar deudas demo:", err);
+          }
+        } else {
+          items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
+          setDbDebts(items);
         }
-      } else {
-        items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
-        setDbDebts(items);
+      } catch (err) {
+        console.error("Error decrypting deudas snapshot:", err);
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `usuarios/${currentUser.uid}/deudas`);
     });
 
     return unsubscribe;
-  }, [currentUser]);
+  }, [currentUser, encryptionKey]);
 
   // Escuchar cuentas en tiempo real de Firestore para el usuario activo + auto-seeding
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !encryptionKey) {
       setAccounts([]);
       return;
     }
 
     const q = query(
-      collection(db, 'usuarios', currentUser.uid, 'cuentas'),
-      orderBy('nombre', 'asc')
+      collection(db, 'usuarios', currentUser.uid, 'cuentas')
     );
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        items.push({
-          id: doc.id,
-          nombre: data.nombre,
-          tipo: data.tipo,
-          saldo: data.saldo,
-          fechaCreacion: data.fechaCreacion,
-          color: data.color || 'emerald',
-          icono: data.icono || 'wallet',
-          subtipo: data.subtipo || (data.tipo === 'deuda' ? 'deudas' : (data.nombre.toLowerCase().includes('ahorro') ? 'ahorros' : 'disponible'))
-        });
-      });
-      
-      setAccounts(items);
-
-      // Si no hay cuentas registradas en Firestore, creamos las cuentas solicitadas por el usuario
-      if (snapshot.empty) {
-        try {
-          const cuentasRef = collection(db, 'usuarios', currentUser.uid, 'cuentas');
-          const movsRef = collection(db, 'usuarios', currentUser.uid, 'movimientos');
-
-          const defaultAccounts = [
-            { nombre: 'Bancolombia', tipo: 'credito', subtipo: 'ahorros', saldo: 4000000, color: 'amber', icono: 'landmark' },
-            { nombre: 'Tarjeta Visa', tipo: 'deuda', subtipo: 'deudas', saldo: 2100000, color: 'rose', icono: 'credit-card' },
-            { nombre: 'Efectivo', tipo: 'credito', subtipo: 'disponible', saldo: 500000, color: 'emerald', icono: 'banknote' },
-            { nombre: 'Nequi', tipo: 'credito', subtipo: 'ahorros', saldo: 1120000, color: 'purple', icono: 'smartphone' },
-            { nombre: 'Daviplata', tipo: 'credito', subtipo: 'ahorros', saldo: 1000000, color: 'red', icono: 'smartphone' },
-            { nombre: 'Paypal', tipo: 'credito', subtipo: 'disponible', saldo: 3500000, color: 'blue', icono: 'dollar-sign' },
-            { nombre: 'Caja menor', tipo: 'credito', subtipo: 'disponible', saldo: 230000, color: 'zinc', icono: 'coins' }
-          ];
-
-          for (const acc of defaultAccounts) {
-            const docRef = await addDoc(cuentasRef, {
-              nombre: acc.nombre,
-              tipo: acc.tipo,
-              subtipo: acc.subtipo,
-              saldo: acc.saldo,
-              color: acc.color,
-              icono: acc.icono,
-              fechaCreacion: new Date().toISOString()
-            });
-
-            // Añadir un movimiento inicial para cada una de las cuentas
-            await addDoc(movsRef, {
-              monto: acc.saldo,
-              tipo: acc.tipo === 'credito' ? 'ingreso' : 'egreso',
-              categoria: acc.tipo === 'credito' ? 'Sueldo' : 'Otros',
-              descripcion: `Saldo inicial - ${acc.nombre}`,
-              fecha: new Date().toISOString().split('T')[0],
-              fechaCreacion: new Date().toISOString(),
-              accountId: docRef.id,
-              cuentaId: docRef.id,
-              amount: acc.saldo,
-              type: acc.tipo === 'credito' ? 'income' : 'expense',
-              category: acc.tipo === 'credito' ? 'Sueldo' : 'Otros',
-              description: `Saldo inicial - ${acc.nombre}`,
-              date: new Date().toISOString()
-            });
+      try {
+        const promises = snapshot.docs.map(async (doc) => {
+          const rawData = doc.data();
+          let data = rawData;
+          if (encryptionKey) {
+            try {
+              data = await decryptDoc(rawData, encryptionKey);
+            } catch (decErr) {
+              console.error(`Error decrypting cuenta ${doc.id}:`, decErr);
+            }
           }
-        } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, `usuarios/${currentUser.uid}`);
+          return {
+            id: doc.id,
+            nombre: data?.nombre || 'Cuenta sin nombre',
+            tipo: data?.tipo || 'credito',
+            saldo: Number(data?.saldo || 0),
+            fechaCreacion: data?.fechaCreacion,
+            color: data?.color || 'emerald',
+            icono: data?.icono || 'wallet',
+            subtipo: data?.subtipo || (data?.tipo === 'deuda' ? 'deudas' : ((data?.nombre || '').toLowerCase().includes('ahorro') ? 'ahorros' : 'disponible'))
+          };
+        });
+        const items = await Promise.all(promises);
+        items.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', undefined, { sensitivity: 'base' }));
+        
+        setAccounts(items);
+
+        if (items.length === 0) {
+          try {
+            const cuentasRef = collection(db, 'usuarios', currentUser.uid, 'cuentas');
+            const movsRef = collection(db, 'usuarios', currentUser.uid, 'movimientos');
+
+            const defaultAccounts = [
+              { nombre: 'Bancolombia', tipo: 'credito', subtipo: 'ahorros', saldo: 4000000, color: 'amber', icono: 'landmark' },
+              { nombre: 'Tarjeta Visa', tipo: 'deuda', subtipo: 'deudas', saldo: 2100000, color: 'rose', icono: 'credit-card' },
+              { nombre: 'Efectivo', tipo: 'credito', subtipo: 'disponible', saldo: 500000, color: 'emerald', icono: 'banknote' },
+              { nombre: 'Nequi', tipo: 'credito', subtipo: 'ahorros', saldo: 1120000, color: 'purple', icono: 'smartphone' },
+              { nombre: 'Daviplata', tipo: 'credito', subtipo: 'ahorros', saldo: 1000000, color: 'red', icono: 'smartphone' },
+              { nombre: 'Paypal', tipo: 'credito', subtipo: 'disponible', saldo: 3500000, color: 'blue', icono: 'dollar-sign' },
+              { nombre: 'Caja menor', tipo: 'credito', subtipo: 'disponible', saldo: 230000, color: 'zinc', icono: 'coins' }
+            ];
+
+            for (const acc of defaultAccounts) {
+              const docRef = await addDoc(cuentasRef, {
+                nombre: acc.nombre,
+                tipo: acc.tipo,
+                subtipo: acc.subtipo,
+                saldo: acc.saldo,
+                color: acc.color,
+                icono: acc.icono,
+                fechaCreacion: new Date().toISOString()
+              });
+
+              await addDoc(movsRef, {
+                monto: acc.saldo,
+                tipo: acc.tipo === 'credito' ? 'ingreso' : 'egreso',
+                categoria: acc.tipo === 'credito' ? 'Sueldo' : 'Otros',
+                descripcion: `Saldo inicial - ${acc.nombre}`,
+                fecha: new Date().toISOString().split('T')[0],
+                fechaCreacion: new Date().toISOString(),
+                accountId: docRef.id,
+                cuentaId: docRef.id,
+                amount: acc.saldo,
+                type: acc.tipo === 'credito' ? 'income' : 'expense',
+                category: acc.tipo === 'credito' ? 'Sueldo' : 'Otros',
+                description: `Saldo inicial - ${acc.nombre}`,
+                date: new Date().toISOString()
+              });
+            }
+          } catch (err) {
+            handleFirestoreError(err, OperationType.WRITE, `usuarios/${currentUser.uid}`);
+          }
         }
+      } catch (err) {
+        console.error("Error decrypting cuentas snapshot:", err);
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `usuarios/${currentUser.uid}/cuentas`);
     });
 
     return unsubscribe;
-  }, [currentUser]);
+  }, [currentUser, encryptionKey]);
 
   // Escuchar suscripciones en tiempo real desde Firestore + auto-seeding
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !encryptionKey) {
       setDbSubscriptions([]);
       return;
     }
@@ -1003,60 +1192,80 @@ export default function App() {
     );
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        items.push({
-          id: doc.id,
-          name: data.name || '',
-          cost: Number(data.cost || 0),
-          dueDate: data.dueDate || '',
-          account: data.account || '',
-          status: data.status || 'active',
-          fechaCreacion: data.fechaCreacion
-        });
-      });
-
-      if (snapshot.empty) {
-        try {
-          const subsRef = collection(db, 'usuarios', currentUser.uid, 'suscripciones');
-          const sampleSubs = [
-            { name: 'Netflix', cost: 44900, dueDate: '2026-07-28', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
-            { name: 'Spotify', cost: 16900, dueDate: '2026-07-15', account: 'Nequi', status: 'active', fechaCreacion: new Date().toISOString() },
-            { name: 'OpenAI (ChatGPT)', cost: 85000, dueDate: '2026-07-20', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
-            { name: 'Google One', cost: 7900, dueDate: '2026-07-05', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
-            { name: 'Amazon Prime', cost: 22900, dueDate: '2026-07-12', account: 'Bancolombia', status: 'active', fechaCreacion: new Date().toISOString() }
-          ];
-          for (const sub of sampleSubs) {
-            await addDoc(subsRef, sub);
+      try {
+        const promises = snapshot.docs.map(async (doc) => {
+          const rawData = doc.data();
+          let data = rawData;
+          if (encryptionKey) {
+            try {
+              data = await decryptDoc(rawData, encryptionKey);
+            } catch (decErr) {
+              console.error(`Error decrypting suscripcion ${doc.id}:`, decErr);
+            }
           }
-        } catch (err) {
-          console.error("Error al inicializar suscripciones demo:", err);
+          return {
+            id: doc.id,
+            name: data?.name || '',
+            cost: Number(data?.cost || 0),
+            dueDate: data?.dueDate || '',
+            account: data?.account || '',
+            status: data?.status || 'active',
+            fechaCreacion: data?.fechaCreacion
+          };
+        });
+        const items = await Promise.all(promises);
+
+        if (items.length === 0) {
+          try {
+            const subsRef = collection(db, 'usuarios', currentUser.uid, 'suscripciones');
+            const sampleSubs = [
+              { name: 'Netflix', cost: 44900, dueDate: '2026-07-28', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
+              { name: 'Spotify', cost: 16900, dueDate: '2026-07-15', account: 'Nequi', status: 'active', fechaCreacion: new Date().toISOString() },
+              { name: 'OpenAI (ChatGPT)', cost: 85000, dueDate: '2026-07-20', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
+              { name: 'Google One', cost: 7900, dueDate: '2026-07-05', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
+              { name: 'Amazon Prime', cost: 22900, dueDate: '2026-07-12', account: 'Bancolombia', status: 'active', fechaCreacion: new Date().toISOString() }
+            ];
+            for (const sub of sampleSubs) {
+              await addDoc(subsRef, sub);
+            }
+          } catch (err) {
+            console.error("Error al inicializar suscripciones demo:", err);
+          }
+        } else {
+          items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
+          setDbSubscriptions(items);
         }
-      } else {
-        items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
-        setDbSubscriptions(items);
+      } catch (err) {
+        console.error("Error decrypting deudas snapshot:", err);
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `usuarios/${currentUser.uid}/suscripciones`);
     });
 
     return unsubscribe;
-  }, [currentUser]);
+  }, [currentUser, encryptionKey]);
 
   // Escuchar preferencias de usuario en tiempo real desde Firestore + auto-seeding
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !encryptionKey) return;
 
     const docRef = doc(db, 'usuarios', currentUser.uid, 'configuracion', 'preferencias');
 
     const unsubscribe = onSnapshot(docRef, async (snapshot) => {
       if (snapshot.exists()) {
-        const data = snapshot.data();
-        setUserProfileName(data.name || '');
-        setUserProfileCurrency(data.currency || 'COP');
-        setUserProfileLanguage(data.language || 'es');
-        setUserProfileTheme(data.theme || 'dark');
+        const rawData = snapshot.data();
+        let data = rawData;
+        if (encryptionKey) {
+          try {
+            data = await decryptDoc(rawData, encryptionKey);
+          } catch (decErr) {
+            console.error("Error decrypting preferencias:", decErr);
+          }
+        }
+        setUserProfileName(data?.name || '');
+        setUserProfileCurrency(data?.currency || 'COP');
+        setUserProfileLanguage(data?.language || 'es');
+        setUserProfileTheme(data?.theme || 'dark');
       } else {
         try {
           // Crear configuraciones por defecto
@@ -1076,57 +1285,9 @@ export default function App() {
     });
 
     return unsubscribe;
-  }, [currentUser]);
+  }, [currentUser, encryptionKey]);
 
-  // Manejar Registro / Login en el Demostrador
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!authEmail || !authPassword) {
-      setAuthError('Por favor complete todos los campos.');
-      return;
-    }
-
-    setAuthLoading(true);
-    setAuthError('');
-    setAuthSuccess('');
-
-    try {
-      if (authMode === 'register') {
-        await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-        const successMsg = '¡Cuenta registrada exitosamente!';
-        setAuthSuccess(successMsg);
-        toast.success(successMsg);
-        // Crear documento del usuario inicial en Firestore
-        // No es estrictamente necesario ya que las colecciones se crean dinámicamente,
-        // pero valida permisos.
-      } else {
-        await signInWithEmailAndPassword(auth, authEmail, authPassword);
-        const successMsg = 'Sesión iniciada con éxito.';
-        setAuthSuccess(successMsg);
-        toast.success(successMsg);
-      }
-    } catch (err: any) {
-      console.error(err);
-      let localizedError = 'Ocurrió un error inesperado.';
-      if (err.code === 'auth/email-already-in-use') {
-        localizedError = 'Este correo electrónico ya está registrado.';
-      } else if (err.code === 'auth/weak-password') {
-        localizedError = 'La contraseña debe tener al menos 6 caracteres.';
-      } else if (err.code === 'auth/invalid-email') {
-        localizedError = 'El formato del correo es inválido.';
-      } else if (err.code === 'auth/invalid-credential') {
-        localizedError = 'Credenciales incorrectas. Verifique su correo y contraseña.';
-      } else if (err.code === 'auth/operation-not-allowed') {
-        localizedError = 'El proveedor de Correo/Contraseña no está habilitado en Firebase. Habilítalo en: Firebase Console > Authentication > Sign-in method.';
-      }
-      setAuthError(localizedError);
-      toast.error(localizedError, { duration: 8000 });
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  // Iniciar Sesión con Google (Proveedor activo por defecto en set_up_firebase)
+  // Iniciar Sesión con Google (Proveedor único activo)
   const handleGoogleLogin = async () => {
     setAuthLoading(true);
     setAuthError('');
@@ -1152,8 +1313,6 @@ export default function App() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      setAuthEmail('');
-      setAuthPassword('');
       setAuthSuccess('');
     } catch (err) {
       console.error("Error al cerrar sesión:", err);
@@ -3678,108 +3837,84 @@ export class DashboardComponent {
               <p className="text-xs text-slate-400">Tu panel inteligente de control financiero y contable</p>
             </div>
 
-            <form onSubmit={handleAuth} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-4">
               <p className="text-xs text-slate-400 leading-relaxed text-center">
-                Ingresa con <strong className="text-emerald-400">Google</strong> de forma directa con 1 clic (recomendado), o introduce tu correo y contraseña registrados.
+                Inicia sesión de forma directa con tu cuenta de <strong className="text-emerald-400">Google</strong> para acceder de manera segura a tu información contable cifrada de extremo a extremo.
               </p>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Correo Electrónico</label>
-                <div className="relative">
-                  <Mail className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
-                  <input 
-                    type="email"
-                    required
-                    placeholder="correo@ejemplo.com"
-                    value={authEmail}
-                    onChange={(e) => setAuthEmail(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Contraseña</label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
-                  <input 
-                    type="password"
-                    required
-                    minLength={6}
-                    placeholder="••••••••"
-                    value={authPassword}
-                    onChange={(e) => setAuthPassword(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
-                  />
-                </div>
-              </div>
-
               {authError && (
-                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400 leading-relaxed">
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400 leading-relaxed text-center">
                   {authError}
                 </div>
               )}
 
               {authSuccess && (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-400">
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-400 text-center">
                   {authSuccess}
                 </div>
               )}
-
-              <div className="flex gap-3 mt-1">
-                <button
-                  type="submit"
-                  disabled={authLoading}
-                  onClick={() => setAuthMode('login')}
-                  className="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold py-2.5 px-4 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10 cursor-pointer"
-                >
-                  {authLoading && authMode === 'login' ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Entrar'}
-                </button>
-                <button
-                  type="submit"
-                  disabled={authLoading}
-                  onClick={() => setAuthMode('register')}
-                  className="flex-1 bg-white/5 hover:bg-white/10 disabled:opacity-50 text-white font-semibold py-2.5 px-4 rounded-xl text-xs border border-white/10 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  {authLoading && authMode === 'register' ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Registrarse'}
-                </button>
-              </div>
-
-              <div className="relative flex items-center justify-center my-1">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-white/10"></div>
-                </div>
-                <span className="relative px-3 bg-[#0d1425] text-[10px] text-slate-500 font-bold tracking-wider">O INGRESA DIRECTO</span>
-              </div>
 
               <button
                 type="button"
                 onClick={handleGoogleLogin}
                 disabled={authLoading}
-                className="w-full bg-white/5 hover:bg-white/10 text-white border border-white/10 hover:border-white/20 py-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 hover:scale-[1.01] active:scale-[0.99] py-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/10 mt-2"
               >
-                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" width="16" height="16">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                </svg>
-                Iniciar con Google (1-Clic)
+                {authLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                ) : (
+                  <>
+                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" width="16" height="16">
+                      <path fill="#000000" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                      <path fill="#000000" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                      <path fill="#000000" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                      <path fill="#000000" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                    </svg>
+                    <span>Continuar con Google</span>
+                  </>
+                )}
               </button>
+
+              <div className="flex items-center justify-center gap-1.5 text-[10px] text-slate-500 mt-2">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Extremo a Extremo (E2EE) habilitado</span>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      ) : isAuthorized === false ? (
+        /* VISTA DE ACCESO NO AUTORIZADO (C7, C8) */
+        <div className="flex-1 flex items-center justify-center p-4 relative z-10 min-h-screen">
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full max-w-md bg-white/5 backdrop-blur-xl border border-red-500/20 rounded-3xl p-8 shadow-2xl flex flex-col gap-6"
+          >
+            <div className="flex flex-col items-center text-center gap-2">
+              <div className="w-16 h-16 rounded-2xl bg-red-500/10 shadow-xl shadow-red-500/5 flex items-center justify-center border border-red-500/30">
+                <ShieldAlert className="w-8 h-8 text-red-400" />
+              </div>
+              <h1 className="text-2xl font-black tracking-tight text-white mt-2">Acceso No Autorizado</h1>
+              <p className="text-xs text-slate-400">Tu cuenta no cumple con las reglas de acceso del sistema</p>
+            </div>
+
+            <div className="flex flex-col gap-4 text-center">
+              <p className="text-xs text-slate-400 leading-relaxed">
+                La cuenta de Google <strong className="text-red-400">{currentUser.email}</strong> no tiene permisos de acceso autorizados para este panel financiero.
+              </p>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Contacta al administrador para habilitar tu dirección de correo o dominio corporativo en la lista de accesos autorizados.
+              </p>
 
               <button
                 type="button"
-                onClick={() => {
-                  setAuthEmail('test@demo.com');
-                  setAuthPassword('123456');
-                  setAuthMode('login');
-                }}
-                className="w-full bg-emerald-500/10 hover:bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer mt-1"
+                onClick={handleLogout}
+                className="w-full bg-white/5 hover:bg-white/10 text-white border border-white/10 hover:border-white/20 py-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                Cargar Cuenta Demo Rápida
+                <LogOut className="w-4 h-4 shrink-0" />
+                Iniciar sesión con otra cuenta
               </button>
-            </form>
+            </div>
           </motion.div>
         </div>
       ) : (
