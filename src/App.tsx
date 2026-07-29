@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import jsPDF from 'jspdf';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -44,7 +45,33 @@ import {
   PieChart,
   Settings,
   Menu,
-  X
+  X,
+  Sun,
+  Moon,
+  Bell,
+  BellRing,
+  Zap,
+  Play,
+  Pause,
+  Clock,
+  AlertCircle,
+  HelpCircle,
+  BookOpen,
+  Download,
+  Printer,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Minimize2,
+  ChevronLeft,
+  ChevronRight,
+  CheckCircle2,
+  Info,
+  Compass,
+  Receipt,
+  Target,
+  BarChart3,
+  FileSpreadsheet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast, Toaster } from 'react-hot-toast';
@@ -328,21 +355,25 @@ export default function App() {
   const [dbSavingsGoals, setDbSavingsGoals] = useState<{ id: string; name: string; targetAmount: number; currentSaved: number; emoji: string }[]>([]);
   
   // Deudas en base de datos
-  const [dbDebts, setDbDebts] = useState<{ id: string; name: string; balance: number; minPayment: number; dueDate: string; type: 'card' | 'loan' | 'other'; fechaCreacion: string }[]>([]);
+  const [dbDebts, setDbDebts] = useState<{ id: string; name: string; balance: number; originalDebt?: number; minPayment: number; dueDate: string; type: 'card' | 'loan' | 'other'; fechaCreacion: string; fechaInicio?: string }[]>([]);
 
   // Campos para creación de deudas
   const [newDebtName, setNewDebtName] = useState('');
   const [newDebtBalance, setNewDebtBalance] = useState('');
+  const [newDebtOriginal, setNewDebtOriginal] = useState('');
   const [newDebtMinPayment, setNewDebtMinPayment] = useState('');
   const [newDebtDueDate, setNewDebtDueDate] = useState('');
   const [newDebtType, setNewDebtType] = useState<'card' | 'loan' | 'other'>('card');
+  const [newDebtStartDate, setNewDebtStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [newDebtLoading, setNewDebtLoading] = useState(false);
 
   // Campos para edición rápida de deudas
   const [editingDebtId, setEditingDebtId] = useState<string | null>(null);
   const [editingDebtBalance, setEditingDebtBalance] = useState('');
+  const [editingDebtOriginal, setEditingDebtOriginal] = useState('');
   const [editingDebtMinPayment, setEditingDebtMinPayment] = useState('');
   const [editingDebtDueDate, setEditingDebtDueDate] = useState('');
+  const [editingDebtStartDate, setEditingDebtStartDate] = useState('');
   const [editingDebtLoading, setEditingDebtLoading] = useState(false);
   
   // Campos para creación de metas de ahorro
@@ -401,7 +432,83 @@ export default function App() {
   const [newAccountColor, setNewAccountColor] = useState<string>('emerald');
   const [newAccountIcon, setNewAccountIcon] = useState<string>('wallet');
   const [newAccountBalance, setNewAccountBalance] = useState('');
+  const [newAccountDebtStartDate, setNewAccountDebtStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [newAccountLoading, setNewAccountLoading] = useState(false);
+
+  // Débitos automáticos en base de datos
+  const [dbAutomaticDebits, setDbAutomaticDebits] = useState<{
+    id: string;
+    name: string;
+    accountId: string;
+    amount: number;
+    category: string;
+    dayOfMonth: number;
+    active: boolean;
+    lastExecutedDate?: string;
+    status?: 'ok' | 'insufficient_funds';
+    fechaCreacion?: string;
+  }[]>([]);
+
+  // Campos para creación de débitos automáticos
+  const [isAddDebitModalOpen, setIsAddDebitModalOpen] = useState(false);
+  const [newDebitName, setNewDebitName] = useState('');
+  const [newDebitAccountId, setNewDebitAccountId] = useState('');
+  const [newDebitAmount, setNewDebitAmount] = useState('');
+  const [newDebitCategory, setNewDebitCategory] = useState('🏠 Servicios Públicos');
+  const [newDebitDayOfMonth, setNewDebitDayOfMonth] = useState('1');
+  const [newDebitActive, setNewDebitActive] = useState(true);
+  const [newDebitLoading, setNewDebitLoading] = useState(false);
+
+  // Permisos y control de notificaciones de dispositivo
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
+    }
+    return 'default';
+  });
+
+  const notifiedBudgetAlertsRef = useRef<Set<string>>(new Set());
+
+  // Disparar notificación nativa del navegador / dispositivo
+  const sendDeviceNotification = (title: string, options?: NotificationOptions) => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'granted') {
+        try {
+          new Notification(title, {
+            icon: '/favicon.ico',
+            badge: '/favicon.ico',
+            dir: 'auto',
+            lang: 'es-CO',
+            ...options
+          });
+        } catch (e) {
+          console.log('Error al enviar notificación nativa:', e);
+        }
+      }
+    }
+  };
+
+  // Solicitar permisos de notificación de dispositivo
+  const requestNotificationPermission = async () => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const perm = await Notification.requestPermission();
+        setNotificationPermission(perm);
+        if (perm === 'granted') {
+          toast.success('Notificaciones del dispositivo activadas.');
+          sendDeviceNotification('🔔 Notificaciones Activadas', {
+            body: 'Recibirás alertas de presupuestos y débitos automáticos en este dispositivo.'
+          });
+        } else if (perm === 'denied') {
+          toast.error('Notificaciones bloqueadas en el navegador. Por favor otorga permisos en los ajustes de tu navegador.');
+        }
+      } catch (e) {
+        console.error('Error al solicitar permisos:', e);
+      }
+    } else {
+      toast.error('Tu navegador no admite notificaciones del dispositivo.');
+    }
+  };
 
   // Campos para "Consultas"
   const [queryStartDate, setQueryStartDate] = useState('');
@@ -429,6 +536,285 @@ export default function App() {
 
   // Estado de Autenticación y E2EE
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  // Estados para Tutorial / Guía de Inicio (Onboarding Interactivo)
+  const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
+
+  // Auto-lanzar el tutorial si es la primera vez que el usuario ingresa
+  useEffect(() => {
+    if (currentUser) {
+      const hasSeen = localStorage.getItem(`contabilidapp_onboarding_seen_${currentUser.uid}`);
+      if (!hasSeen) {
+        setIsOnboardingModalOpen(true);
+      }
+    }
+  }, [currentUser]);
+
+  const handleFinishOnboarding = (dontShowAgain = true) => {
+    if (currentUser && dontShowAgain) {
+      localStorage.setItem(`contabilidapp_onboarding_seen_${currentUser.uid}`, 'true');
+    }
+    setIsOnboardingModalOpen(false);
+    setOnboardingStep(0);
+    toast.success('¡Guía de inicio completada! Puedes reabrirla en cualquier momento desde la barra superior o en Configuración.');
+  };
+
+  // Estados para el Visor del Manual de Usuario PDF en Configuración
+  const [pdfPage, setPdfPage] = useState(1);
+  const totalPdfPages = 6;
+  const [pdfZoom, setPdfZoom] = useState(100);
+  const [isPdfFullscreen, setIsPdfFullscreen] = useState(false);
+
+  // Función para Generar y Descargar el Manual de Usuario en PDF Real con jsPDF
+  const handleDownloadUserManualPDF = () => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pagesData = [
+        {
+          chapter: 'CAPÍTULO 1: DASHBOARD Y GESTOR DE CUENTAS',
+          modules: [
+            {
+              name: '1. Dashboard General',
+              desc: 'Centro de mando visual e interactivo con métricas financieras consolidadas en tiempo real.',
+              goal: 'Ofrecer visibilidad instantánea de la liquidez total, patrimonio neto, ingresos, egresos y flujo de caja del mes.',
+              howTo: [
+                '1. Observa los 4 indicadores KPI superiores: Patrimonio Neto, Ingresos, Egresos y Porcentaje de Ahorro.',
+                '2. Usa los botones "Nuevo Registro" o "Transferir" para accesos directos de entrada rápida.',
+                '3. Analiza el gráfico circular de Distribución de Gastos por Categoría para identificar desvíos.'
+              ]
+            },
+            {
+              name: '2. Gestor de Cuentas y Débitos Automáticos',
+              desc: 'Administración de instrumentos financieros clasificados en Activo (Bancos/Efectivo) y Pasivo (Crédito/Deudas).',
+              goal: 'Organizar saldos disponibles, tarjetas de crédito y programar cobros recurrentes con alertas de liquidez.',
+              howTo: [
+                '1. Haz clic en "Crear Cuenta". Selecciona Tipo: Activo (Ahorros/Efectivo) o Pasivo (Tarjetas/Créditos) e ingresa el Saldo Inicial.',
+                '2. Para mover fondos entre cuentas sin alterar tus ingresos/gastos globales, usa "Realizar Transferencia".',
+                '3. Débitos Automáticos: En la pestaña Débitos, registra servicios o suscripciones fijas. Si la cuenta elegida no tiene saldo suficiente el día de cobro, el sistema emitirá una alerta emergente nativa.'
+              ]
+            }
+          ]
+        },
+        {
+          chapter: 'CAPÍTULO 2: MOVIMIENTOS Y CATEGORÍAS',
+          modules: [
+            {
+              name: '3. Movimientos y Consultas',
+              desc: 'Bitácora central e interactiva para el registro de transacciones de Ingreso y Egreso.',
+              goal: 'Llevar la contabilidad exacta con soporte documental adjunto (facturas/recibos en PDF o imagen).',
+              howTo: [
+                '1. Haz clic en "Nuevo Movimiento" y selecciona el Tipo (Ingreso / Egreso).',
+                '2. Ingresa Monto, Fecha, Categoría, Cuenta asociada y una nota explicativa.',
+                '3. Adjunta una fotografía o PDF de la factura desde la zona de carga de archivos.',
+                '4. Utiliza los filtros superiores por rango de fechas, cuenta o categoría para buscar o auditar transacciones.'
+              ]
+            },
+            {
+              name: '4. Gestor de Categorías',
+              desc: 'Clasificador personalizable para la organización de la procedencia y destino del dinero.',
+              goal: 'Estructurar los conceptos de gasto e ingreso con íconos y colores representativos.',
+              howTo: [
+                '1. En el módulo Categorías, presiona "Agregar Categoría".',
+                '2. Selecciona si la categoría aplica para Ingresos o Egresos.',
+                '3. Asigna un Nombre (ej. Supermercado, Alquiler, Sueldo), selecciona un Ícono y un Color.',
+                '4. Guarda los cambios; la categoría estará disponible inmediatamente en Movimientos y Presupuestos.'
+              ]
+            }
+          ]
+        },
+        {
+          chapter: 'CAPÍTULO 3: PRESUPUESTOS Y METAS DE AHORRO',
+          modules: [
+            {
+              name: '5. Control de Presupuestos',
+              desc: 'Techos de gasto mensual asignados por categoría con monitoreo de consumo en tiempo real.',
+              goal: 'Prevenir sobrecostos y mantener tus egresos dentro de límites previamente planificados.',
+              howTo: [
+                '1. Presiona "Crear Presupuesto", selecciona la Categoría de egreso y el límite máximo mensual.',
+                '2. Observa la barra de estado de color: Verde (<80%), Amarillo (80%-99%), Rojo (100% o más).',
+                '3. Notificaciones Nativas: Activa las notificaciones del navegador en Configuración para recibir alertas emergentes automáticas en tu dispositivo al alcanzar el 80% y 100% del límite.'
+              ]
+            },
+            {
+              name: '6. Metas de Ahorro',
+              desc: 'Módulo de reserva de capital para proyectos u objetivos financieros a mediano y largo plazo.',
+              goal: 'Fomentar el hábito del ahorro estructurado (Fondo de Emergencia, Vacaciones, Vehículo).',
+              howTo: [
+                '1. Presiona "Nueva Meta de Ahorro" e ingresa el Nombre, Monto Objetivo y Fecha Límite opcional.',
+                '2. Para sumar capital, pulsa "Realizar Aporte" y selecciona la Cuenta origen desde donde se descontará el dinero.',
+                '3. Monitorea el porcentaje acumulado y la barra de progreso hacia tu meta.'
+              ]
+            }
+          ]
+        },
+        {
+          chapter: 'CAPÍTULO 4: CONTROL DE DEUDAS Y SUSCRIPCIONES',
+          modules: [
+            {
+              name: '7. Control de Deudas y Créditos',
+              desc: 'Módulo de gestión integral de pasivos, préstamos bancarios, familiares y tarjetas de crédito.',
+              goal: 'Eliminar recargos por mora y mantener visibilidad constante de cuotas y fechas límites de pago.',
+              howTo: [
+                '1. Registra la deuda indicando Acreedor, Saldo Pendiente, Cuota Mínima, Tasa de Interés y Día de Corte/Pago.',
+                '2. Cada vez que realices un pago, selecciona "Registrar Abono" para descontar el saldo principal.',
+                '3. Revisa la insignia de alerta que aparece cuando la fecha límite de pago está a 5 días o menos.'
+              ]
+            },
+            {
+              name: '8. Control de Suscripciones',
+              desc: 'Administración de servicios periódicos de débito automático (Streaming, Software, Gimnasio).',
+              goal: 'Identificar fugas silenciosas de dinero por membresías no utilizadas y proyectar el costo anual.',
+              howTo: [
+                '1. Agrega la suscripción indicando Servicio, Valor, Periodicidad y Cuenta de Cargo.',
+                '2. Consulta el resumen de Gasto Anual Acumulado para evaluar cancelaciones u optimizaciones.'
+              ]
+            }
+          ]
+        },
+        {
+          chapter: 'CAPÍTULO 5: ESTADÍSTICAS Y REPORTES FINANCIEROS',
+          modules: [
+            {
+              name: '9. Estadísticas y Análisis',
+              desc: 'Visualizador gráfico analítico con gráficos de distribución y comparativos históricos.',
+              goal: 'Detectar patrones de consumo, hábitos de gasto y evaluar la capacidad de ahorro.',
+              howTo: [
+                '1. Explora el gráfico circular de Distribución para conocer en qué categoría se concentran tus gastos.',
+                '2. Revisa la gráfica comparativa de 12 meses para analizar la evolución de tus Ingresos vs. Egresos.'
+              ]
+            },
+            {
+              name: '10. Reportes Financieros y Exportación',
+              desc: 'Generador de Estados Financieros estándar (Estado de Resultados, Flujo de Caja) y respaldos cifrados.',
+              goal: 'Facilitar la auditoría personal, preparación de balances y resguardo seguro de datos.',
+              howTo: [
+                '1. Selecciona el rango de fechas a auditar (Mes actual, Año actual o Personalizado).',
+                '2. Revisa el balance generado y haz clic en "Exportar a Excel (CSV)" para obtener tu hoja de cálculo.',
+                '3. Pulsa "Respaldar Datos JSON" para descargar una copia de seguridad cifrada en tu equipo.'
+              ]
+            }
+          ]
+        },
+        {
+          chapter: 'CAPÍTULO 6: CONFIGURACIÓN, SEGURIDAD E2EE Y FAQ',
+          modules: [
+            {
+              name: '11. Módulo de Configuración y Seguridad',
+              desc: 'Centro de preferencias del sistema, cifrado E2EE AES-256, notificaciones y opciones de cuenta.',
+              goal: 'Garantizar privacidad total de la información contable y personalizar el entorno de trabajo.',
+              howTo: [
+                '1. Moneda Predeterminada: Define la divisa del sistema ($ COP, $ USD, € EUR, etc.).',
+                '2. Notificaciones del Sistema: Activa los permisos nativos del navegador para alertas de sobregiro.',
+                '3. Seguridad E2EE: Tu clave maestra encripta los datos localmente antes de enviarse a la base de datos.',
+                '4. Manual PDF y Guía de Inicio: Vuelve a abrir este manual o el tutorial interactivo cuando lo requieras.'
+              ]
+            }
+          ]
+        }
+      ];
+
+      pagesData.forEach((pageInfo, pageIdx) => {
+        if (pageIdx > 0) doc.addPage();
+
+        // Fondo A4 slate-900
+        doc.setFillColor(15, 23, 42);
+        doc.rect(0, 0, 210, 297, 'F');
+
+        // Banner Superior emerald
+        doc.setFillColor(16, 185, 129);
+        doc.rect(15, 12, 180, 22, 'F');
+
+        doc.setTextColor(15, 23, 42);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(14);
+        doc.text('CONTABILIDAPP - MANUAL DE USUARIO', 20, 22);
+        doc.setFontSize(8.5);
+        doc.text('Guía Oficial de Módulos, Configuración y Seguridad E2EE v2.0', 20, 28);
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Fecha: ${new Date().toLocaleDateString('es-CO')}`, 15, 40);
+        doc.text(`Usuario: ${currentUser?.email || 'Usuario Registrado'}`, 15, 44);
+
+        // Header Capítulo
+        doc.setFillColor(30, 41, 59);
+        doc.roundedRect(15, 48, 180, 9, 2, 2, 'F');
+        doc.setTextColor(52, 211, 153);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.text(pageInfo.chapter, 18, 54);
+
+        let y = 64;
+
+        pageInfo.modules.forEach((mod) => {
+          doc.setFillColor(30, 41, 59);
+          doc.roundedRect(15, y, 180, 7, 1.5, 1.5, 'F');
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9);
+          doc.text(mod.name, 18, y + 5);
+
+          y += 10;
+
+          // Descripción
+          doc.setTextColor(52, 211, 153);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.text('• Descripción:', 18, y);
+          doc.setTextColor(226, 232, 240);
+          doc.setFont('helvetica', 'normal');
+          const descLines = doc.splitTextToSize(mod.desc, 150);
+          doc.text(descLines, 42, y);
+          y += descLines.length * 4.5;
+
+          // Objetivo
+          doc.setTextColor(250, 204, 21);
+          doc.setFont('helvetica', 'bold');
+          doc.text('• Lo que busca:', 18, y);
+          doc.setTextColor(226, 232, 240);
+          doc.setFont('helvetica', 'normal');
+          const goalLines = doc.splitTextToSize(mod.goal, 150);
+          doc.text(goalLines, 42, y);
+          y += goalLines.length * 4.5;
+
+          // Cómo usar / configurar
+          doc.setTextColor(129, 140, 248);
+          doc.setFont('helvetica', 'bold');
+          doc.text('• Cómo usar/configurar:', 18, y);
+          y += 4.5;
+
+          doc.setTextColor(203, 213, 225);
+          doc.setFont('helvetica', 'normal');
+          mod.howTo.forEach((step) => {
+            const stepLines = doc.splitTextToSize(step, 168);
+            doc.text(stepLines, 22, y);
+            y += stepLines.length * 4.2;
+          });
+
+          y += 6;
+        });
+
+        // Pie de página
+        doc.setFontSize(7.5);
+        doc.setTextColor(148, 163, 184);
+        doc.text('ContabilidApp v2.0 - Manual Oficial de Usuario', 105, 288, { align: 'center' });
+        doc.text(`Página ${pageIdx + 1} de ${pagesData.length}`, 185, 288);
+      });
+
+      doc.save('Manual_de_Usuario_ContabilidApp.pdf');
+      toast.success('📄 Manual de usuario descargado en PDF.');
+    } catch (e) {
+      console.error('Error generando PDF:', e);
+      toast.error('No se pudo generar el PDF del manual.');
+    }
+  };
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -635,6 +1021,9 @@ export default function App() {
       .filter(t => t.type === 'expense')
       .reduce((sum, t) => sum + t.amount, 0);
 
+    const chartTextColor = userProfileTheme === 'light' ? '#1e293b' : '#cbd5e1';
+    const chartGridColor = userProfileTheme === 'light' ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
+
     // 1. Gráfico de Barras: Comparación Mensual
     if (barCanvasRef.current) {
       if (barChartRef.current) {
@@ -667,8 +1056,8 @@ export default function App() {
             legend: { display: false }
           },
           scales: {
-            x: { grid: { display: false }, ticks: { color: '#94a3b8' } },
-            y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#94a3b8' } }
+            x: { grid: { display: false }, ticks: { color: chartTextColor } },
+            y: { grid: { color: chartGridColor }, ticks: { color: chartTextColor } }
           }
         }
       });
@@ -719,7 +1108,7 @@ export default function App() {
             legend: { 
               position: 'right', 
               labels: { 
-                color: '#94a3b8', 
+                color: chartTextColor, 
                 boxWidth: 10,
                 font: { size: 10 }
               } 
@@ -733,7 +1122,7 @@ export default function App() {
       if (barChartRef.current) barChartRef.current.destroy();
       if (doughnutChartRef.current) doughnutChartRef.current.destroy();
     };
-  }, [activeModule, transactions, currentUser]);
+  }, [activeModule, transactions, currentUser, userProfileTheme]);
 
   // Cerrar el menú con la tecla Esc y bloquear el scroll del body
   useEffect(() => {
@@ -839,12 +1228,17 @@ export default function App() {
           const fecha = data?.fecha || data?.date || new Date().toISOString();
           
           return {
+            ...data,
             id: doc.id,
             amount: monto,
             type: (tipo === 'ingreso' || tipo === 'income') ? 'income' : 'expense',
             category: data?.categoria || data?.category || 'Otros',
             description: data?.descripcion || data?.description || '',
-            date: fecha
+            date: fecha,
+            accountId: data?.accountId || data?.cuentaId || '',
+            cuentaId: data?.cuentaId || data?.accountId || '',
+            attachment: data?.attachment || data?.adjunto || '',
+            adjunto: data?.adjunto || data?.attachment || ''
           };
         });
         const items = await Promise.all(promises);
@@ -980,30 +1374,8 @@ export default function App() {
         });
         const items = await Promise.all(promises);
         
-        if (items.length === 0) {
-          try {
-            const goalsRef = collection(db, 'usuarios', currentUser.uid, 'metas');
-            await addDoc(goalsRef, {
-              name: 'Viaje Japón',
-              targetAmount: 15000000,
-              currentSaved: 8300000,
-              emoji: '✈️',
-              fechaCreacion: new Date().toISOString()
-            });
-            await addDoc(goalsRef, {
-              name: 'Emergencias',
-              targetAmount: 10000000,
-              currentSaved: 8200000,
-              emoji: '🚨',
-              fechaCreacion: new Date().toISOString()
-            });
-          } catch (err) {
-            console.error("Error al inicializar metas demo:", err);
-          }
-        } else {
-          items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
-          setDbSavingsGoals(items);
-        }
+        items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
+        setDbSavingsGoals(items);
       } catch (err) {
         console.error("Error decrypting metas snapshot:", err);
       }
@@ -1041,40 +1413,18 @@ export default function App() {
             id: doc.id,
             name: data?.name || '',
             balance: Number(data?.balance || 0),
+            originalDebt: data?.originalDebt !== undefined ? Number(data.originalDebt) : Number(data?.balance || 0),
             minPayment: Number(data?.minPayment || 0),
             dueDate: data?.dueDate || '',
             type: data?.type || 'card',
-            fechaCreacion: data?.fechaCreacion
+            fechaCreacion: data?.fechaCreacion,
+            fechaInicio: data?.fechaInicio || ''
           };
         });
         const items = await Promise.all(promises);
         
-        if (items.length === 0) {
-          try {
-            const debtsRef = collection(db, 'usuarios', currentUser.uid, 'deudas');
-            await addDoc(debtsRef, {
-              name: 'Visa',
-              balance: 1200000,
-              minPayment: 180000,
-              dueDate: '2026-07-18',
-              type: 'card',
-              fechaCreacion: new Date().toISOString()
-            });
-            await addDoc(debtsRef, {
-              name: 'Préstamo',
-              balance: 8000000,
-              minPayment: 650000,
-              dueDate: '2026-07-07',
-              type: 'loan',
-              fechaCreacion: new Date().toISOString()
-            });
-          } catch (err) {
-            console.error("Error al inicializar deudas demo:", err);
-          }
-        } else {
-          items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
-          setDbDebts(items);
-        }
+        items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
+        setDbDebts(items);
       } catch (err) {
         console.error("Error decrypting deudas snapshot:", err);
       }
@@ -1123,53 +1473,6 @@ export default function App() {
         items.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', undefined, { sensitivity: 'base' }));
         
         setAccounts(items);
-
-        if (items.length === 0) {
-          try {
-            const cuentasRef = collection(db, 'usuarios', currentUser.uid, 'cuentas');
-            const movsRef = collection(db, 'usuarios', currentUser.uid, 'movimientos');
-
-            const defaultAccounts = [
-              { nombre: 'Bancolombia', tipo: 'credito', subtipo: 'ahorros', saldo: 4000000, color: 'amber', icono: 'landmark' },
-              { nombre: 'Tarjeta Visa', tipo: 'deuda', subtipo: 'deudas', saldo: 2100000, color: 'rose', icono: 'credit-card' },
-              { nombre: 'Efectivo', tipo: 'credito', subtipo: 'disponible', saldo: 500000, color: 'emerald', icono: 'banknote' },
-              { nombre: 'Nequi', tipo: 'credito', subtipo: 'ahorros', saldo: 1120000, color: 'purple', icono: 'smartphone' },
-              { nombre: 'Daviplata', tipo: 'credito', subtipo: 'ahorros', saldo: 1000000, color: 'red', icono: 'smartphone' },
-              { nombre: 'Paypal', tipo: 'credito', subtipo: 'disponible', saldo: 3500000, color: 'blue', icono: 'dollar-sign' },
-              { nombre: 'Caja menor', tipo: 'credito', subtipo: 'disponible', saldo: 230000, color: 'zinc', icono: 'coins' }
-            ];
-
-            for (const acc of defaultAccounts) {
-              const docRef = await addDoc(cuentasRef, {
-                nombre: acc.nombre,
-                tipo: acc.tipo,
-                subtipo: acc.subtipo,
-                saldo: acc.saldo,
-                color: acc.color,
-                icono: acc.icono,
-                fechaCreacion: new Date().toISOString()
-              });
-
-              await addDoc(movsRef, {
-                monto: acc.saldo,
-                tipo: acc.tipo === 'credito' ? 'ingreso' : 'egreso',
-                categoria: acc.tipo === 'credito' ? 'Sueldo' : 'Otros',
-                descripcion: `Saldo inicial - ${acc.nombre}`,
-                fecha: new Date().toISOString().split('T')[0],
-                fechaCreacion: new Date().toISOString(),
-                accountId: docRef.id,
-                cuentaId: docRef.id,
-                amount: acc.saldo,
-                type: acc.tipo === 'credito' ? 'income' : 'expense',
-                category: acc.tipo === 'credito' ? 'Sueldo' : 'Otros',
-                description: `Saldo inicial - ${acc.nombre}`,
-                date: new Date().toISOString()
-              });
-            }
-          } catch (err) {
-            handleFirestoreError(err, OperationType.WRITE, `usuarios/${currentUser.uid}`);
-          }
-        }
       } catch (err) {
         console.error("Error decrypting cuentas snapshot:", err);
       }
@@ -1215,26 +1518,8 @@ export default function App() {
         });
         const items = await Promise.all(promises);
 
-        if (items.length === 0) {
-          try {
-            const subsRef = collection(db, 'usuarios', currentUser.uid, 'suscripciones');
-            const sampleSubs = [
-              { name: 'Netflix', cost: 44900, dueDate: '2026-07-28', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
-              { name: 'Spotify', cost: 16900, dueDate: '2026-07-15', account: 'Nequi', status: 'active', fechaCreacion: new Date().toISOString() },
-              { name: 'OpenAI (ChatGPT)', cost: 85000, dueDate: '2026-07-20', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
-              { name: 'Google One', cost: 7900, dueDate: '2026-07-05', account: 'Visa', status: 'active', fechaCreacion: new Date().toISOString() },
-              { name: 'Amazon Prime', cost: 22900, dueDate: '2026-07-12', account: 'Bancolombia', status: 'active', fechaCreacion: new Date().toISOString() }
-            ];
-            for (const sub of sampleSubs) {
-              await addDoc(subsRef, sub);
-            }
-          } catch (err) {
-            console.error("Error al inicializar suscripciones demo:", err);
-          }
-        } else {
-          items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
-          setDbSubscriptions(items);
-        }
+        items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
+        setDbSubscriptions(items);
       } catch (err) {
         console.error("Error decrypting deudas snapshot:", err);
       }
@@ -1244,6 +1529,257 @@ export default function App() {
 
     return unsubscribe;
   }, [currentUser, encryptionKey]);
+
+  // Escuchar débitos automáticos en tiempo real desde Firestore
+  useEffect(() => {
+    if (!currentUser || !encryptionKey) {
+      setDbAutomaticDebits([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, 'usuarios', currentUser.uid, 'debitos_automaticos')
+    );
+
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      try {
+        const promises = snapshot.docs.map(async (doc) => {
+          const rawData = doc.data();
+          let data = rawData;
+          if (encryptionKey) {
+            try {
+              data = await decryptDoc(rawData, encryptionKey);
+            } catch (decErr) {
+              console.error(`Error decrypting debit ${doc.id}:`, decErr);
+            }
+          }
+          return {
+            id: doc.id,
+            name: data?.name || '',
+            accountId: data?.accountId || '',
+            amount: Number(data?.amount || 0),
+            category: data?.category || '🏠 Servicios Públicos',
+            dayOfMonth: Number(data?.dayOfMonth || 1),
+            active: data?.active !== false,
+            lastExecutedDate: data?.lastExecutedDate || '',
+            status: (data?.status as 'ok' | 'insufficient_funds') || 'ok',
+            fechaCreacion: data?.fechaCreacion
+          };
+        });
+        const items = await Promise.all(promises);
+        items.sort((a, b) => new Date(a.fechaCreacion || '').getTime() - new Date(b.fechaCreacion || '').getTime());
+        setDbAutomaticDebits(items);
+      } catch (err) {
+        console.error("Error decrypting debitos_automaticos snapshot:", err);
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `usuarios/${currentUser.uid}/debitos_automaticos`);
+    });
+
+    return unsubscribe;
+  }, [currentUser, encryptionKey]);
+
+  // Monitorear sobrepaso de presupuestos y lanzar notificaciones al dispositivo
+  useEffect(() => {
+    if (!dbBudgets.length || !transactions.length) return;
+
+    const currentYearMonth = new Date().toISOString().slice(0, 7);
+
+    dbBudgets.forEach(budget => {
+      const currentSpend = getMonthlySpendForCategory(budget.category);
+      const maxAmount = budget.maxAmount;
+      const alertThreshold = budget.alertThreshold || 95;
+      if (maxAmount <= 0) return;
+
+      const pct = (currentSpend / maxAmount) * 100;
+      const isExceeded = currentSpend > maxAmount;
+      const isWarning = !isExceeded && pct >= alertThreshold;
+
+      if (isExceeded || isWarning) {
+        const alertType = isExceeded ? 'exceeded' : 'warning';
+        const alertKey = `${budget.id}_${alertType}_${currentYearMonth}`;
+
+        if (!notifiedBudgetAlertsRef.current.has(alertKey)) {
+          notifiedBudgetAlertsRef.current.add(alertKey);
+
+          const categoryClean = budget.category.replace(/^([\u2000-\u32ff\ud83c-\udbff\udf00-\udfff\s]+)/, '').trim() || budget.category;
+          const title = isExceeded
+            ? `🔴 Presupuesto Excedido: ${categoryClean}`
+            : `⚠️ Alerta de Presupuesto (${pct.toFixed(0)}%): ${categoryClean}`;
+
+          const body = isExceeded
+            ? `¡Atención! Has gastado $${currentSpend.toLocaleString('es-CO')} superando tu tope mensual de $${maxAmount.toLocaleString('es-CO')}.`
+            : `Has consumido el ${pct.toFixed(0)}% ($${currentSpend.toLocaleString('es-CO')}) de tu presupuesto de $${maxAmount.toLocaleString('es-CO')}.`;
+
+          sendDeviceNotification(title, { body });
+          if (isExceeded) {
+            toast.error(`${title} — ${body}`, { duration: 6000 });
+          } else {
+            toast(`${title} — ${body}`, { duration: 5000, icon: '⚠️' });
+          }
+        }
+      }
+    });
+  }, [dbBudgets, transactions]);
+
+  // Crear nuevo débito automático
+  const handleAddAutomaticDebit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+
+    const amountNum = parseNumberMask(newDebitAmount);
+    if (!newDebitName.trim() || amountNum <= 0) {
+      toast.error('Por favor ingresa un nombre y monto válido para el débito automático.');
+      return;
+    }
+
+    if (!newDebitAccountId) {
+      toast.error('Por favor selecciona la cuenta de donde se debitará.');
+      return;
+    }
+
+    setNewDebitLoading(true);
+    try {
+      const docRef = collection(db, 'usuarios', currentUser.uid, 'debitos_automaticos');
+      await addDoc(docRef, {
+        name: newDebitName.trim(),
+        accountId: newDebitAccountId,
+        amount: amountNum,
+        category: newDebitCategory,
+        dayOfMonth: Math.min(31, Math.max(1, Number(newDebitDayOfMonth) || 1)),
+        active: newDebitActive,
+        lastExecutedDate: '',
+        status: 'ok',
+        fechaCreacion: new Date().toISOString()
+      });
+
+      toast.success('Débito automático guardado con éxito.');
+      setIsAddDebitModalOpen(false);
+      setNewDebitName('');
+      setNewDebitAmount('');
+      setNewDebitDayOfMonth('1');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/debitos_automaticos`);
+    } finally {
+      setNewDebitLoading(false);
+    }
+  };
+
+  // Activar / Desactivar débito automático
+  const handleToggleAutomaticDebit = async (id: string, currentActive: boolean) => {
+    if (!currentUser) return;
+    try {
+      const docRef = doc(db, 'usuarios', currentUser.uid, 'debitos_automaticos', id);
+      await updateDoc(docRef, { active: !currentActive });
+      toast.success(!currentActive ? 'Débito automático activado.' : 'Débito automático pausado.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/debitos_automaticos/${id}`);
+    }
+  };
+
+  // Eliminar débito automático
+  const handleDeleteAutomaticDebit = async (id: string) => {
+    if (!currentUser) return;
+    try {
+      const docRef = doc(db, 'usuarios', currentUser.uid, 'debitos_automaticos', id);
+      await deleteDoc(docRef);
+      toast.success('Débito automático eliminado.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `usuarios/${currentUser.uid}/debitos_automaticos/${id}`);
+    }
+  };
+
+  // Procesar Débitos Automáticos (Evaluar fecha y disponibilidad de saldo)
+  const processAutomaticDebits = async (isManualTrigger = false) => {
+    if (!currentUser || !dbAutomaticDebits.length) {
+      if (isManualTrigger) toast('No hay débitos automáticos configurados.', { icon: 'ℹ️' });
+      return;
+    }
+
+    const today = new Date();
+    const currentDay = today.getDate();
+    const currentYearMonth = today.toISOString().slice(0, 7);
+
+    let executedCount = 0;
+    let failedCount = 0;
+
+    for (const debit of dbAutomaticDebits) {
+      if (!debit.active) continue;
+
+      const acc = accounts.find(a => a.id === debit.accountId);
+      const accSaldo = acc ? acc.saldo : 0;
+      const isDue = currentDay >= debit.dayOfMonth && debit.lastExecutedDate !== currentYearMonth;
+
+      if (isDue || isManualTrigger) {
+        if (!acc || accSaldo < debit.amount) {
+          // ALERTA DE SALDO INSUFICIENTE
+          failedCount++;
+          const title = `🔴 Fondo Insuficiente - Débito Automático`;
+          const body = `La cuenta "${acc ? acc.nombre : 'Seleccionada'}" no tiene suficiente saldo ($${accSaldo.toLocaleString('es-CO')}) para debitar $${debit.amount.toLocaleString('es-CO')} de "${debit.name}".`;
+
+          sendDeviceNotification(title, { body });
+          toast.error(`⚠️ Saldo insuficiente en ${acc ? acc.nombre : 'cuenta'} para debitar $${debit.amount.toLocaleString('es-CO')} (${debit.name}).`, { duration: 7000 });
+
+          try {
+            const docRef = doc(db, 'usuarios', currentUser.uid, 'debitos_automaticos', debit.id);
+            await updateDoc(docRef, { status: 'insufficient_funds' });
+          } catch (e) {
+            console.error("Error al actualizar estado del débito:", e);
+          }
+        } else if (debit.lastExecutedDate !== currentYearMonth) {
+          // POSEE SALDO Y CORRESPONDE EJECUTAR
+          try {
+            const newSaldo = acc.saldo - debit.amount;
+
+            // 1. Actualizar saldo de cuenta
+            const accRef = doc(db, 'usuarios', currentUser.uid, 'cuentas', acc.id);
+            await updateDoc(accRef, { saldo: newSaldo });
+
+            // 2. Registrar egreso en movimientos
+            await addDoc(collection(db, 'usuarios', currentUser.uid, 'movimientos'), {
+              monto: debit.amount,
+              tipo: 'egreso',
+              categoria: debit.category,
+              descripcion: `Débito Automático - ${debit.name}`,
+              fecha: new Date().toISOString().split('T')[0],
+              fechaCreacion: new Date().toISOString(),
+              accountId: acc.id,
+              cuentaId: acc.id,
+              amount: debit.amount,
+              type: 'expense',
+              category: debit.category,
+              description: `Débito Automático - ${debit.name}`,
+              date: new Date().toISOString()
+            });
+
+            // 3. Sincronizar saldo de deuda
+            await syncAccountDebtBalance(currentUser.uid, acc.id, newSaldo);
+
+            // 4. Marcar débito como ejecutado este mes
+            const docRef = doc(db, 'usuarios', currentUser.uid, 'debitos_automaticos', debit.id);
+            await updateDoc(docRef, {
+              lastExecutedDate: currentYearMonth,
+              status: 'ok'
+            });
+
+            executedCount++;
+
+            const title = `✅ Débito Automático Exitoso`;
+            const body = `Se debitaron $${debit.amount.toLocaleString('es-CO')} de "${acc.nombre}" para "${debit.name}".`;
+
+            sendDeviceNotification(title, { body });
+            toast.success(`✅ Débito automático "${debit.name}" ($${debit.amount.toLocaleString('es-CO')}) procesado en ${acc.nombre}.`);
+          } catch (err) {
+            console.error("Error al ejecutar débito automático:", err);
+          }
+        }
+      }
+    }
+
+    if (isManualTrigger && executedCount === 0 && failedCount === 0) {
+      toast('Todos los débitos automáticos están al día para este mes.', { icon: 'ℹ️' });
+    }
+  };
 
   // Escuchar preferencias de usuario en tiempo real desde Firestore + auto-seeding
   useEffect(() => {
@@ -1609,6 +2145,21 @@ export default function App() {
     }
   };
 
+  // Formato simple DD/MM/YYYY
+  const formatDateDisplay = (dateStr: string): string => {
+    if (!dateStr) return '';
+    try {
+      const cleanDate = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+      const parts = cleanDate.split('-');
+      if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      }
+      return dateStr;
+    } catch {
+      return dateStr;
+    }
+  };
+
   // Sincronizar saldo de cuenta con la deuda asociada
   const syncAccountDebtBalance = async (uid: string, accountId: string, newBalance: number) => {
     try {
@@ -1666,10 +2217,15 @@ export default function App() {
     }
 
     const balanceNum = parseNumberMask(newDebtBalance);
+    const originalDebtNum = newDebtOriginal ? parseNumberMask(newDebtOriginal) : balanceNum;
     const minPaymentNum = parseNumberMask(newDebtMinPayment);
 
     if (balanceNum <= 0) {
       toast.error('Por favor ingrese un saldo de deuda válido.');
+      return;
+    }
+    if (originalDebtNum < balanceNum) {
+      toast.error('El monto original no puede ser menor al saldo pendiente actual.');
       return;
     }
     if (minPaymentNum <= 0) {
@@ -1679,6 +2235,8 @@ export default function App() {
 
     setNewDebtLoading(true);
     try {
+      const startDateIso = new Date(newDebtStartDate + 'T12:00:00').toISOString();
+
       // 1. Crear la cuenta financiera correspondiente de tipo 'deuda'
       const accountsRef = collection(db, 'usuarios', currentUser.uid, 'cuentas');
       const accountDocRef = await addDoc(accountsRef, {
@@ -1688,7 +2246,8 @@ export default function App() {
         saldo: balanceNum,
         color: newDebtType === 'card' ? 'rose' : 'purple',
         icono: newDebtType === 'card' ? 'credit-card' : 'landmark',
-        fechaCreacion: new Date().toISOString()
+        fechaCreacion: startDateIso,
+        fechaInicio: newDebtStartDate
       });
 
       // 2. Crear la obligación de deuda en Firestore vinculada a la cuenta
@@ -1696,11 +2255,13 @@ export default function App() {
       const debtDocRef = await addDoc(debtsRef, {
         name: newDebtName.trim(),
         balance: balanceNum,
+        originalDebt: originalDebtNum,
         minPayment: minPaymentNum,
         dueDate: newDebtDueDate,
         type: newDebtType,
         accountId: accountDocRef.id,
-        fechaCreacion: new Date().toISOString()
+        fechaCreacion: startDateIso,
+        fechaInicio: newDebtStartDate
       });
 
       // 3. Vincular el ID de la deuda en la cuenta financiera
@@ -1715,7 +2276,7 @@ export default function App() {
           tipo: 'egreso',
           categoria: 'Sueldo',
           descripcion: `Saldo inicial (Deuda) - ${newDebtName.trim()}`,
-          fecha: new Date().toISOString().split('T')[0],
+          fecha: newDebtStartDate,
           fechaCreacion: new Date().toISOString(),
           accountId: accountDocRef.id,
           cuentaId: accountDocRef.id,
@@ -1723,16 +2284,18 @@ export default function App() {
           type: 'expense',
           category: 'Sueldo',
           description: `Saldo inicial (Deuda) - ${newDebtName.trim()}`,
-          date: new Date().toISOString()
+          date: startDateIso
         });
       }
 
       toast.success('Deuda y cuenta asociada creadas con éxito.');
       setNewDebtName('');
       setNewDebtBalance('');
+      setNewDebtOriginal('');
       setNewDebtMinPayment('');
       setNewDebtDueDate('');
       setNewDebtType('card');
+      setNewDebtStartDate(new Date().toISOString().split('T')[0]);
       setIsAddDebtModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/deudas`);
@@ -1745,10 +2308,15 @@ export default function App() {
   const handleUpdateDebt = async (debtId: string) => {
     if (!currentUser) return;
     const balanceNum = parseNumberMask(editingDebtBalance);
+    const originalDebtNum = editingDebtOriginal ? parseNumberMask(editingDebtOriginal) : balanceNum;
     const minPaymentNum = parseNumberMask(editingDebtMinPayment);
 
     if (balanceNum < 0) {
       toast.error('Por favor ingrese un saldo de deuda válido.');
+      return;
+    }
+    if (originalDebtNum < balanceNum) {
+      toast.error('El monto original no puede ser menor al saldo pendiente actual.');
       return;
     }
     if (minPaymentNum < 0) {
@@ -1761,8 +2329,10 @@ export default function App() {
       const docRef = doc(db, 'usuarios', currentUser.uid, 'deudas', debtId);
       await updateDoc(docRef, {
         balance: balanceNum,
+        originalDebt: originalDebtNum,
         minPayment: minPaymentNum,
-        dueDate: editingDebtDueDate
+        dueDate: editingDebtDueDate,
+        ...(editingDebtStartDate ? { fechaInicio: editingDebtStartDate } : {})
       });
 
       // Sincronizar con la cuenta vinculada si existe
@@ -1772,8 +2342,10 @@ export default function App() {
 
       setEditingDebtId(null);
       setEditingDebtBalance('');
+      setEditingDebtOriginal('');
       setEditingDebtMinPayment('');
       setEditingDebtDueDate('');
+      setEditingDebtStartDate('');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `usuarios/${currentUser.uid}/deudas/${debtId}`);
     } finally {
@@ -2053,6 +2625,10 @@ export default function App() {
     }
     const parsedBalance = parseNumberMask(newAccountBalance);
     const finalSubtipo = newAccountType === 'deuda' ? 'deudas' : newAccountSubtipo;
+    const isDebt = newAccountType === 'deuda';
+    const finalFechaCreacion = isDebt 
+      ? new Date(newAccountDebtStartDate + 'T12:00:00').toISOString() 
+      : new Date().toISOString();
     
     setNewAccountLoading(true);
     try {
@@ -2064,11 +2640,12 @@ export default function App() {
         saldo: parsedBalance,
         color: newAccountColor,
         icono: newAccountIcon,
-        fechaCreacion: new Date().toISOString()
+        fechaCreacion: finalFechaCreacion,
+        ...(isDebt ? { fechaInicio: newAccountDebtStartDate } : {})
       });
       
       let createdDebtId: string | null = null;
-      if (newAccountType === 'deuda') {
+      if (isDebt) {
         const debtsRef = collection(db, 'usuarios', currentUser.uid, 'deudas');
         const defaultMinPayment = Math.ceil(parsedBalance * 0.05) || 50;
         const futureDate = new Date();
@@ -2078,11 +2655,13 @@ export default function App() {
         const debtDocRef = await addDoc(debtsRef, {
           name: newAccountName.trim(),
           balance: parsedBalance,
+          originalDebt: parsedBalance,
           minPayment: defaultMinPayment,
           dueDate: defaultDueDate,
           type: newAccountIcon === 'credit-card' ? 'card' : 'loan',
           accountId: docRef.id,
-          fechaCreacion: new Date().toISOString()
+          fechaCreacion: finalFechaCreacion,
+          fechaInicio: newAccountDebtStartDate
         });
         createdDebtId = debtDocRef.id;
       }
@@ -2099,7 +2678,7 @@ export default function App() {
           tipo: newAccountType === 'credito' ? 'ingreso' : 'egreso',
           categoria: 'Sueldo',
           descripcion: `Saldo inicial - ${newAccountName}`,
-          fecha: new Date().toISOString().split('T')[0],
+          fecha: isDebt ? newAccountDebtStartDate : new Date().toISOString().split('T')[0],
           fechaCreacion: new Date().toISOString(),
           accountId: docRef.id,
           cuentaId: docRef.id,
@@ -2107,7 +2686,7 @@ export default function App() {
           type: newAccountType === 'credito' ? 'income' : 'expense',
           category: 'Sueldo',
           description: `Saldo inicial - ${newAccountName}`,
-          date: new Date().toISOString()
+          date: finalFechaCreacion
         });
       }
 
@@ -2117,6 +2696,7 @@ export default function App() {
       setNewAccountColor('emerald');
       setNewAccountIcon('wallet');
       setNewAccountSubtipo('disponible');
+      setNewAccountDebtStartDate(new Date().toISOString().split('T')[0]);
       setShowNewAccountModal(false);
       setSelectedAccountId(docRef.id); // Autoseleccionar la cuenta creada
     } catch (err) {
@@ -3791,7 +4371,7 @@ export class DashboardComponent {
   };
 
     return (
-    <div className="min-h-screen bg-[#0f172a] text-slate-200 flex flex-col font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-300 relative overflow-hidden">
+    <div className={`min-h-screen ${userProfileTheme === 'light' ? 'theme-light bg-[#f8fafc] text-slate-800' : 'theme-dark bg-[#0f172a] text-slate-200'} flex flex-col font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-300 relative overflow-hidden`}>
       <Toaster position="top-right" reverseOrder={false} toastOptions={{
         style: {
           background: '#1e293b',
@@ -4172,12 +4752,27 @@ export class DashboardComponent {
                   </p>
                 </div>
               </div>
-              {firestoreConnected && (
-                <div className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  Conectado
-                </div>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOnboardingStep(0);
+                    setIsOnboardingModalOpen(true);
+                  }}
+                  className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                  title="Abrir Guía / Tutorial de Inicio"
+                >
+                  <Compass className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">Guía de Inicio</span>
+                </button>
+
+                {firestoreConnected && (
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Conectado
+                  </div>
+                )}
+              </div>
             </header>
 
             {/* Contenedor Interior Dinámico */}
@@ -4350,311 +4945,568 @@ export class DashboardComponent {
                 )}
 
                 {/* 6. MÓDULO: ESTADÍSTICAS */}
-                {activeModule === 'estadisticas' && (
-                  <motion.div
-                    key="module-estadisticas"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.15 }}
-                    className="grid grid-cols-1 lg:grid-cols-12 gap-6"
-                  >
-                    {/* COLUMNA IZQUIERDA: SCORE FINANCIERO PERSONAL */}
-                    <div className="lg:col-span-5 flex flex-col gap-4">
-                      {/* Score Financiero Personal */}
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col items-center text-center gap-5">
-                        <div className="absolute top-[-10%] left-[-10%] w-[120px] h-[120px] bg-blue-500/10 rounded-full blur-2xl pointer-events-none"></div>
-                        
-                        <div className="w-full text-left">
-                          <h3 className="font-extrabold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-2">Score Financiero Personal</h3>
-                          <p className="text-[10px] text-slate-400 mt-1">Algoritmo inteligente basado en tu balance, deudas y nivel de ahorro.</p>
-                        </div>
+                {activeModule === 'estadisticas' && (() => {
+                  const today = new Date();
+                  const currentYear = today.getFullYear();
+                  const currentMonth = today.getMonth() + 1;
 
-                        {/* Medidor Circular Visual */}
-                        {(() => {
-                          // Calcular Score real de salud financiera
-                          // Balance mensual de egresos vs ingresos
-                          const totInc = transactions.filter(t => t.type === 'income' || t.tipo === 'ingreso').reduce((sum, t) => sum + t.amount, 0);
-                          const totExp = transactions.filter(t => t.type === 'expense' || t.tipo === 'egreso').reduce((sum, t) => sum + t.amount, 0);
-                          const totSav = dbSavingsGoals.reduce((sum, s) => sum + s.currentSaved, 0);
-                          const totDeb = dbDebts.reduce((sum, d) => sum + d.balance, 0);
+                  // 1. Filtrar transacciones del mes actual para estadísticas locales
+                  const currentMonthTxs = transactions.filter(t => {
+                    if (!t.date) return false;
+                    const d = new Date(t.date);
+                    return d.getFullYear() === currentYear && (d.getMonth() + 1) === currentMonth;
+                  });
 
-                          let score = 550; // valor base
+                  // 2. Cálculos para el Score de Salud Financiera
+                  const totInc = transactions.filter(t => t.type === 'income' || t.tipo === 'ingreso').reduce((sum, t) => sum + t.amount, 0);
+                  const totExp = transactions.filter(t => t.type === 'expense' || t.tipo === 'egreso').reduce((sum, t) => sum + t.amount, 0);
+                  const totSav = dbSavingsGoals.reduce((sum, s) => sum + s.currentSaved, 0);
+                  const totDeb = dbDebts.reduce((sum, d) => sum + d.balance, 0);
 
-                          if (totInc > 0) {
-                            const ratio = totExp / totInc;
-                            if (ratio < 0.4) score += 150;
-                            else if (ratio < 0.7) score += 50;
-                            else score -= 100;
-                          }
+                  let score = 550; // Base
+                  if (totInc > 0) {
+                    const ratio = totExp / totInc;
+                    if (ratio < 0.4) score += 150;
+                    else if (ratio < 0.7) score += 50;
+                    else score -= 100;
+                  }
+                  if (totSav > 500000) score += 100;
+                  if (totDeb > 5000000) score -= 120;
+                  else if (totDeb === 0) score += 120;
 
-                          if (totSav > 500000) score += 100;
-                          if (totDeb > 5000000) score -= 120;
-                          else if (totDeb === 0) score += 120;
+                  score = Math.max(300, Math.min(850, score));
 
-                          // Forzar límites de 300 a 850 (escala normal de crédito)
-                          score = Math.max(300, Math.min(850, score));
+                  let level = 'Favorable';
+                  let colorClass = 'text-emerald-400';
+                  let barColor = 'stroke-emerald-500';
+                  if (score >= 750) {
+                    level = 'Excelente 👑';
+                    colorClass = 'text-emerald-400';
+                    barColor = 'stroke-emerald-500';
+                  } else if (score >= 620) {
+                    level = 'Favorable 👍';
+                    colorClass = 'text-blue-400';
+                    barColor = 'stroke-blue-500';
+                  } else if (score >= 500) {
+                    level = 'Moderado ⚠️';
+                    colorClass = 'text-amber-400';
+                    barColor = 'stroke-amber-500';
+                  } else {
+                    level = 'En Alerta 🚨';
+                    colorClass = 'text-rose-400';
+                    barColor = 'stroke-rose-500';
+                  }
 
-                          let level = 'Favorable';
-                          let colorClass = 'text-emerald-400';
-                          let barColor = 'stroke-emerald-500';
-                          if (score >= 750) {
-                            level = 'Excelente 👑';
-                            colorClass = 'text-emerald-400';
-                            barColor = 'stroke-emerald-500';
-                          } else if (score >= 620) {
-                            level = 'Favorable 👍';
-                            colorClass = 'text-blue-400';
-                            barColor = 'stroke-blue-500';
-                          } else if (score >= 500) {
-                            level = 'Moderado ⚠️';
-                            colorClass = 'text-amber-400';
-                            barColor = 'stroke-amber-500';
-                          } else {
-                            level = 'En Alerta 🚨';
-                            colorClass = 'text-rose-400';
-                            barColor = 'stroke-rose-500';
-                          }
+                  const scoreDashoffset = 251.2 - (251.2 * ((score - 300) / 550));
 
-                          // Porcentaje de la circunferencia para el SVG dashboard
-                          const strokeDashoffset = 251.2 - (251.2 * ((score - 300) / 550));
+                  // Tasa de Ahorro
+                  const savingsRate = totInc > 0 ? Math.round(((totInc - totExp) / totInc) * 100) : 0;
+                  let savingsLabel = 'Baja (0%)';
+                  let savingsColor = 'text-rose-400';
+                  if (savingsRate >= 30) {
+                    savingsLabel = `Excelente (+${savingsRate}%)`;
+                    savingsColor = 'text-emerald-400';
+                  } else if (savingsRate >= 15) {
+                    savingsLabel = `Favorable (+${savingsRate}%)`;
+                    savingsColor = 'text-emerald-400';
+                  } else if (savingsRate > 0) {
+                    savingsLabel = `Moderada (+${savingsRate}%)`;
+                    savingsColor = 'text-amber-400';
+                  } else if (savingsRate < 0) {
+                    savingsLabel = `Déficit (${savingsRate}%)`;
+                    savingsColor = 'text-rose-400';
+                  }
 
-                          return (
-                            <div className="flex flex-col items-center gap-3">
-                              <div className="relative w-40 h-40 flex items-center justify-center">
-                                {/* SVG Arc */}
-                                <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
-                                  {/* Círculo fondo */}
-                                  <circle cx="50" cy="50" r="40" stroke="rgba(255,255,255,0.03)" strokeWidth="8" fill="transparent" />
-                                  {/* Círculo relleno */}
-                                  <circle 
-                                    cx="50" 
-                                    cy="50" 
-                                    r="40" 
-                                    stroke="url(#scoreGradient)" 
-                                    strokeWidth="8" 
-                                    fill="transparent" 
-                                    strokeDasharray="251.2"
-                                    strokeDashoffset={strokeDashoffset}
-                                    strokeLinecap="round"
-                                    className="transition-all duration-1000 ease-out"
-                                  />
-                                  <defs>
-                                    <linearGradient id="scoreGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                                      <stop offset="0%" stopColor="#f43f5e" />
-                                      <stop offset="50%" stopColor="#f59e0b" />
-                                      <stop offset="100%" stopColor="#10b981" />
-                                    </linearGradient>
-                                  </defs>
-                                </svg>
+                  // Razón de Endeudamiento
+                  const totalAssets = accounts.reduce((sum, a) => sum + (a.saldo || a.balance || 0), 0);
+                  const debtRatio = totalAssets > 0 ? Math.round((totDeb / (totalAssets + totDeb)) * 100) : (totDeb > 0 ? 100 : 0);
+                  let debtLabel = 'Excelente (0%)';
+                  let debtColor = 'text-emerald-400';
+                  if (debtRatio > 50) {
+                    debtLabel = `Crítico (${debtRatio}%)`;
+                    debtColor = 'text-rose-400';
+                  } else if (debtRatio > 30) {
+                    debtLabel = `Alto (${debtRatio}%)`;
+                    debtColor = 'text-amber-400';
+                  } else if (debtRatio > 10) {
+                    debtLabel = `Moderado (${debtRatio}%)`;
+                    debtColor = 'text-slate-300';
+                  } else if (debtRatio > 0) {
+                    debtLabel = `Bajo (${debtRatio}%)`;
+                    debtColor = 'text-emerald-400';
+                  }
 
-                                <div className="absolute flex flex-col items-center justify-center">
-                                  <span className="text-3xl font-black text-white font-mono">{score}</span>
-                                  <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Escala CIFIN</span>
-                                </div>
-                              </div>
+                  // Cumplimiento de Presupuestos
+                  let complianceRate = 100;
+                  if (dbBudgets.length > 0) {
+                    let compliantCount = 0;
+                    dbBudgets.forEach(b => {
+                      const catExpense = currentMonthTxs
+                        .filter(t => (t.type === 'expense' || t.tipo === 'egreso') && t.category === b.category)
+                        .reduce((sum, t) => sum + t.amount, 0);
+                      if (catExpense <= b.maxAmount) {
+                        compliantCount++;
+                      }
+                    });
+                    complianceRate = Math.round((compliantCount / dbBudgets.length) * 100);
+                  }
+                  let complianceLabel = 'Excelente (100%)';
+                  let complianceColor = 'text-emerald-400';
+                  if (complianceRate >= 90) {
+                    complianceLabel = `Excelente (${complianceRate}%)`;
+                    complianceColor = 'text-emerald-400';
+                  } else if (complianceRate >= 70) {
+                    complianceLabel = `Favorable (${complianceRate}%)`;
+                    complianceColor = 'text-blue-400';
+                  } else if (complianceRate >= 50) {
+                    complianceLabel = `Moderado (${complianceRate}%)`;
+                    complianceColor = 'text-amber-400';
+                  } else {
+                    complianceLabel = `En Alerta (${complianceRate}%)`;
+                    complianceColor = 'text-rose-400';
+                  }
 
-                              <div className="flex flex-col items-center">
-                                <span className={`text-sm font-extrabold uppercase tracking-wide ${colorClass}`}>{level}</span>
-                                <span className="text-[10px] text-slate-400 mt-1">Tienes más capacidad que el 78% de usuarios.</span>
-                              </div>
-                            </div>
-                          );
-                        })()}
+                  // Helpers de Color
+                  const getCategoryHexColor = (categoryName: string): string => {
+                    const norm = categoryName.toLowerCase();
+                    if (norm.includes('aliment') || norm.includes('comida') || norm.includes('🍔') || norm.includes('restaurante')) return '#10b981'; // Emerald
+                    if (norm.includes('hogar') || norm.includes('alquiler') || norm.includes('casa') || norm.includes('🏠') || norm.includes('vivienda')) return '#3b82f6'; // Blue
+                    if (norm.includes('transport') || norm.includes('auto') || norm.includes('🚗') || norm.includes('gasolina')) return '#f59e0b'; // Amber
+                    if (norm.includes('deuda') || norm.includes('tarjeta') || norm.includes('pasivo') || norm.includes('💳') || norm.includes('préstamo')) return '#ef4444'; // Red
+                    if (norm.includes('entretenimiento') || norm.includes('ocio') || norm.includes('cine') || norm.includes('🎬') || norm.includes('diversión')) return '#ec4899'; // Pink
+                    if (norm.includes('educa') || norm.includes('colegio') || norm.includes('🎓') || norm.includes('estudio')) return '#06b6d4'; // Cyan
+                    if (norm.includes('salud') || norm.includes('medicina') || norm.includes('🏥') || norm.includes('farmacia')) return '#f43f5e'; // Rose
+                    if (norm.includes('ahorro') || norm.includes('invers') || norm.includes('📈') || norm.includes('bolsa')) return '#8b5cf6'; // Violet/Purple
+                    return '#a855f7'; // Purple fallback
+                  };
 
-                        {/* Score Breakdown Analysis */}
-                        <div className="w-full flex flex-col gap-2 text-xs text-left border-t border-white/5 pt-4 mt-1">
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-400">Tasa de Ahorro</span>
-                            <span className="font-bold text-emerald-400">Favorable (+15%)</span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-400">Razón de Endeudamiento</span>
-                            <span className="font-bold text-slate-300">Moderado (22%)</span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-400">Cumplimiento de Presupuestos</span>
-                            <span className="font-bold text-emerald-400">Excelente (92%)</span>
-                          </div>
-                        </div>
-                      </div>
+                  // 3. Dynamic Insights Generation
+                  const expensesByCategory: Record<string, number> = {};
+                  currentMonthTxs
+                    .filter(t => t.type === 'expense' || t.tipo === 'egreso')
+                    .forEach(t => {
+                      expensesByCategory[t.category] = (expensesByCategory[t.category] || 0) + t.amount;
+                    });
+                  
+                  const totalCurrentMonthExpenses = Object.values(expensesByCategory).reduce((sum, v) => sum + v, 0);
+                  let topSpendingCategory = '';
+                  let topSpendingAmount = 0;
+                  Object.entries(expensesByCategory).forEach(([cat, amt]) => {
+                    if (amt > topSpendingAmount) {
+                      topSpendingAmount = amt;
+                      topSpendingCategory = cat;
+                    }
+                  });
 
-                      {/* AI Insights & Recomendaciones */}
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
-                        <h4 className="font-bold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-1.5 flex items-center gap-2">
-                          <Sparkles className="w-4 h-4 text-emerald-400" />
-                          Insights de Inteligencia Financiera
-                        </h4>
+                  let insight1Text = '';
+                  if (topSpendingAmount > 0 && totalCurrentMonthExpenses > 0) {
+                    const pct = Math.round((topSpendingAmount / totalCurrentMonthExpenses) * 100);
+                    insight1Text = `Este mes has destinado el ${pct}% de tus egresos a la categoría ${topSpendingCategory} (${userProfileCurrency === 'COP' ? 'COP' : '$'} ${topSpendingAmount.toLocaleString('es-CO')}). Te sugerimos vigilar esta categoría para cumplir tus metas.`;
+                  } else {
+                    insight1Text = 'Aún no registras egresos este mes. Monitorea tus consumos diarios para mantener una disciplina financiera óptima.';
+                  }
 
-                        <div className="flex flex-col gap-3 text-xs mt-1">
-                          <div className="p-3 bg-white/5 border border-white/5 hover:border-white/10 rounded-xl leading-relaxed text-slate-300">
-                            💡 <strong>Alerta de alimentación:</strong> Este mes gastaste un <strong className="text-amber-400">18% más</strong> en restaurantes. Te sugerimos moderar las salidas de fin de semana para cumplir con tus metas de ahorro.
-                          </div>
+                  let insight2Text = '';
+                  if (dbSavingsGoals.length > 0) {
+                    const sortedGoals = [...dbSavingsGoals].sort((a, b) => {
+                      const pctA = a.targetAmount > 0 ? (a.currentSaved / a.targetAmount) : 0;
+                      const pctB = b.targetAmount > 0 ? (b.currentSaved / b.targetAmount) : 0;
+                      return pctB - pctA;
+                    });
+                    const bestGoal = sortedGoals[0];
+                    const goalPct = bestGoal.targetAmount > 0 ? Math.round((bestGoal.currentSaved / bestGoal.targetAmount) * 100) : 0;
+                    insight2Text = `¡Excelente ritmo! Has completado el ${goalPct}% de tu meta "${bestGoal.emoji} ${bestGoal.name}". Mantener tus aportes constantes te ayudará a finalizarla antes de lo esperado.`;
+                  } else {
+                    insight2Text = 'Establece metas de ahorro fijas (ej. fondo de emergencias, educación o viajes) para automatizar tu disciplina financiera.';
+                  }
 
-                          <div className="p-3 bg-white/5 border border-white/5 hover:border-white/10 rounded-xl leading-relaxed text-slate-300">
-                            📈 <strong>¡Buen ritmo de ahorro!</strong> Has alcanzado el <strong className="text-emerald-400">55%</strong> de tu meta <strong className="text-white">"Viaje Japón"</strong>. Si mantienes este ritmo, terminarás de fondearla 2 meses antes de lo previsto.
-                          </div>
+                  let insight3Text = '';
+                  const totalActiveSubCost = dbSubscriptions
+                    .filter(s => s.status === 'active')
+                    .reduce((sum, s) => sum + s.cost, 0);
+                  
+                  if (totalActiveSubCost > 0) {
+                    if (totInc > 0) {
+                      const subPct = (totalActiveSubCost / totInc) * 100;
+                      insight3Text = `Tus suscripciones activas representan el ${subPct.toFixed(1)}% de tus ingresos mensuales (${userProfileCurrency === 'COP' ? 'COP' : '$'} ${totalActiveSubCost.toLocaleString('es-CO')}). Un valor bajo garantiza un mayor flujo de liquidez libre.`;
+                    } else {
+                      insight3Text = `Tus suscripciones activas mensuales suman ${userProfileCurrency === 'COP' ? 'COP' : '$'} ${totalActiveSubCost.toLocaleString('es-CO')}. Revisa periódicamente las suscripciones que no uses para evitar cobros innecesarios.`;
+                    }
+                  } else {
+                    insight3Text = 'Gran control de gastos fijos. No tienes suscripciones recurrentes activas registradas, lo que libera mayor capital para inversión y ahorro.';
+                  }
 
-                          <div className="p-3 bg-white/5 border border-white/5 hover:border-white/10 rounded-xl leading-relaxed text-slate-300">
-                            🛡️ <strong>Gastos Hormiga controlados:</strong> Tus suscripciones mensuales fijas representan solo el <strong className="text-emerald-400">4.8%</strong> de tus ingresos actuales. Gran control de pasivos hormiga.
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                  // 4. Dynamic Expense Distribution (Doughnut Chart + Legend)
+                  let finalCategoryDistribution: { category: string; amount: number; percentage: number; color: string }[] = [];
+                  let displayUsingFallback = false;
 
-                    {/* COLUMNA DERECHA: GRÁFICOS INTERACTIVOS DE INGRESOS, GASTOS Y CATEGORÍAS */}
-                    <div className="lg:col-span-7 flex flex-col gap-4">
-                      {/* Gráfico de Categorías Circular (Dona) */}
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
-                        <h4 className="font-bold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-2">Distribución de Gastos Mensuales</h4>
+                  if (totalCurrentMonthExpenses > 0) {
+                    finalCategoryDistribution = Object.entries(expensesByCategory).map(([cat, amt]) => {
+                      return {
+                        category: cat,
+                        amount: amt,
+                        percentage: Math.round((amt / totalCurrentMonthExpenses) * 100)
+                      };
+                    }).sort((a, b) => b.amount - a.amount).map(item => {
+                      return {
+                        ...item,
+                        color: getCategoryHexColor(item.category)
+                      };
+                    });
+                  } else {
+                    // Cargar históricos generales de egresos
+                    const allTimeExpenses: Record<string, number> = {};
+                    transactions
+                      .filter(t => t.type === 'expense' || t.tipo === 'egreso')
+                      .forEach(t => {
+                        allTimeExpenses[t.category] = (allTimeExpenses[t.category] || 0) + t.amount;
+                      });
+                    const totalAllTimeExpenses = Object.values(allTimeExpenses).reduce((sum, v) => sum + v, 0);
 
-                        {/* SVG Pie Chart Premium e Interactivo */}
-                        <div className="flex flex-col sm:flex-row items-center gap-6 py-2">
-                          {/* SVG Donut */}
-                          <div className="w-40 h-40 shrink-0 relative flex items-center justify-center">
-                            <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="rgba(255,255,255,0.03)" strokeWidth="4" />
-                              
-                              {/* Alimentos: 30% */}
-                              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#10b981" strokeWidth="4" 
-                                strokeDasharray="30 70" strokeDashoffset="0" />
+                    if (totalAllTimeExpenses > 0) {
+                      finalCategoryDistribution = Object.entries(allTimeExpenses).map(([cat, amt]) => {
+                        return {
+                          category: cat,
+                          amount: amt,
+                          percentage: Math.round((amt / totalAllTimeExpenses) * 100)
+                        };
+                      }).sort((a, b) => b.amount - a.amount).map(item => {
+                        return {
+                          ...item,
+                          color: getCategoryHexColor(item.category)
+                        };
+                      });
+                    } else {
+                      displayUsingFallback = true;
+                      finalCategoryDistribution = [
+                        { category: '🍔 Alimentación', amount: 300000, percentage: 30, color: '#10b981' },
+                        { category: '🏠 Vivienda', amount: 200000, percentage: 20, color: '#3b82f6' },
+                        { category: '🚗 Transporte', amount: 150000, percentage: 15, color: '#f59e0b' },
+                        { category: '💳 Deudas', amount: 100000, percentage: 10, color: '#ef4444' },
+                        { category: '🎬 Entretenimiento', amount: 80000, percentage: 8, color: '#ec4899' },
+                        { category: '💡 Otros', amount: 170000, percentage: 17, color: '#8b5cf6' }
+                      ];
+                    }
+                  }
 
-                              {/* Vivienda: 20% */}
-                              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#3b82f6" strokeWidth="4" 
-                                strokeDasharray="20 80" strokeDashoffset="-30" />
+                  // Forzar que sume exactamente 100%
+                  let runningPctSum = 0;
+                  finalCategoryDistribution.forEach((item, index) => {
+                    if (index === finalCategoryDistribution.length - 1) {
+                      item.percentage = Math.max(0, 100 - runningPctSum);
+                    } else {
+                      runningPctSum += item.percentage;
+                    }
+                  });
 
-                              {/* Transporte: 15% */}
-                              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#f59e0b" strokeWidth="4" 
-                                strokeDasharray="15 85" strokeDashoffset="-50" />
+                  // 5. Historial últimos 12 meses
+                  const last12MonthsData: { label: string; value: number }[] = [];
+                  const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+                  let totalHistoricalExpenses = 0;
 
-                              {/* Deudas: 10% */}
-                              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#ef4444" strokeWidth="4" 
-                                strokeDasharray="10 90" strokeDashoffset="-65" />
+                  for (let i = 11; i >= 0; i--) {
+                    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+                    const y = d.getFullYear();
+                    const m = d.getMonth();
+                    const label = `${monthNames[m]} ${String(y).slice(-2)}`;
+                    
+                    const txsInMonth = transactions.filter(t => {
+                      if (!t.date) return false;
+                      const txDate = new Date(t.date);
+                      return txDate.getFullYear() === y && txDate.getMonth() === m;
+                    });
+                    
+                    const monthlyExpenses = txsInMonth
+                      .filter(t => t.type === 'expense' || t.tipo === 'egreso')
+                      .reduce((sum, t) => sum + t.amount, 0);
+                    
+                    totalHistoricalExpenses += monthlyExpenses;
+                    last12MonthsData.push({ label, value: monthlyExpenses });
+                  }
 
-                              {/* Entretenimiento: 8% */}
-                              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#ec4899" strokeWidth="4" 
-                                strokeDasharray="8 92" strokeDashoffset="-75" />
+                  let finalHistoricalData: { label: string; value: number; displayValue: string }[] = [];
+                  let maxHistVal = 1;
+                  
+                  if (totalHistoricalExpenses > 0) {
+                    maxHistVal = Math.max(...last12MonthsData.map(item => item.value), 1);
+                    finalHistoricalData = last12MonthsData.map(item => {
+                      let displayValue = '';
+                      if (userProfileCurrency === 'COP') {
+                        displayValue = `COP ${(item.value / 1000000).toFixed(2)}M`;
+                      } else {
+                        displayValue = `${userProfileCurrency} $${item.value.toLocaleString('es-CO')}`;
+                      }
+                      return {
+                        ...item,
+                        displayValue
+                      };
+                    });
+                  } else {
+                    const mockValues = [4.2, 3.8, 4.5, 5.1, 4.9, 6.8, 3.5, 3.9, 4.1, 4.4, 4.7, 5.2];
+                    maxHistVal = 7.2;
+                    finalHistoricalData = last12MonthsData.map((item, idx) => {
+                      const mockValInM = mockValues[idx];
+                      return {
+                        label: item.label,
+                        value: mockValInM,
+                        displayValue: `COP ${mockValInM}M (Ejemplo)`
+                      };
+                    });
+                  }
 
-                              {/* Otros: 17% */}
-                              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#8b5cf6" strokeWidth="4" 
-                                strokeDasharray="17 83" strokeDashoffset="-83" />
-                            </svg>
-                            <div className="absolute flex flex-col items-center">
-                              <span className="text-xl font-black text-white font-mono">100%</span>
-                              <span className="text-[8px] text-slate-500 font-bold uppercase">Clasificado</span>
-                            </div>
-                          </div>
-
-                          {/* Legend / Table Breakdown */}
-                          <div className="flex-1 w-full grid grid-cols-2 gap-x-4 gap-y-2.5 text-xs">
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0"></span>
-                              <span className="text-slate-400 truncate">🍔 Alimentación <strong className="text-white ml-1">30%</strong></span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0"></span>
-                              <span className="text-slate-400 truncate">🏠 Vivienda <strong className="text-white ml-1">20%</strong></span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0"></span>
-                              <span className="text-slate-400 truncate">🚗 Transporte <strong className="text-white ml-1">15%</strong></span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0"></span>
-                              <span className="text-slate-400 truncate">💳 Deudas <strong className="text-white ml-1">10%</strong></span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-pink-500 shrink-0"></span>
-                              <span className="text-slate-400 truncate">🎬 Entretenimiento <strong className="text-white ml-1">8%</strong></span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shrink-0"></span>
-                              <span className="text-slate-400 truncate">💡 Otros <strong className="text-white ml-1">17%</strong></span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Gráfico Histórico de Gastos: Últimos 12 meses */}
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
-                        <div className="flex justify-between items-center border-b border-white/5 pb-2">
-                          <h4 className="font-bold text-white text-xs tracking-wider uppercase">Tendencia de Gastos (Últimos 12 Meses)</h4>
-                          <span className="text-[10px] font-mono text-slate-500">Histórico en millones de COP</span>
-                        </div>
-
-                        {/* Interactive SVG Bar chart columns */}
-                        <div className="h-44 w-full flex items-end gap-2 sm:gap-3.5 pt-4">
-                          {[
-                            { m: 'Jul 25', v: 4.2 }, { m: 'Ago 25', v: 3.8 }, { m: 'Sep 25', v: 4.5 },
-                            { m: 'Oct 25', v: 5.1 }, { m: 'Nov 25', v: 4.9 }, { m: 'Dic 25', v: 6.8 },
-                            { m: 'Ene 26', v: 3.5 }, { m: 'Feb 26', v: 3.9 }, { m: 'Mar 26', v: 4.1 },
-                            { m: 'Abr 26', v: 4.4 }, { m: 'May 26', v: 4.7 }, { m: 'Jun 26', v: 5.2 }
-                          ].map((item, i) => {
-                            const percentHeight = `${(item.v / 7.2) * 100}%`;
-                            const isCurrent = i === 11;
-                            return (
-                              <div key={i} className="flex-1 flex flex-col items-center gap-1.5 group cursor-pointer h-full justify-end">
-                                <div className="w-full relative h-full flex items-end">
-                                  {/* Tooltip on hover */}
-                                  <div className="absolute bottom-[calc(100%+6px)] left-1/2 -translate-x-1/2 scale-0 group-hover:scale-100 bg-slate-900 border border-white/10 px-2 py-1 rounded text-[9px] font-mono text-emerald-400 whitespace-nowrap z-30 transition-all pointer-events-none shadow-xl">
-                                    COP {item.v}M
-                                  </div>
-                                  <div 
-                                    className={`w-full rounded-t-lg transition-all duration-500 ${isCurrent ? 'bg-emerald-500 shadow-md shadow-emerald-500/10' : 'bg-white/10 hover:bg-white/20'}`} 
-                                    style={{ height: percentHeight }}
-                                  ></div>
-                                </div>
-                                <span className="text-[8px] sm:text-[9px] text-slate-500 font-mono tracking-tighter truncate w-full text-center">
-                                  {item.m}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Gráfico Comparativo: Ingresos vs Gastos */}
-                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
-                        <h4 className="font-bold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-2">Balance Contable Mensual (Ingresos vs Gastos)</h4>
-
-                        {(() => {
-                          const totInc = transactions.filter(t => t.type === 'income' || t.tipo === 'ingreso').reduce((sum, t) => sum + t.amount, 0) || 12000000;
-                          const totExp = transactions.filter(t => t.type === 'expense' || t.tipo === 'egreso').reduce((sum, t) => sum + t.amount, 0) || 8400000;
+                  return (
+                    <motion.div
+                      key="module-estadisticas"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      transition={{ duration: 0.15 }}
+                      className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+                    >
+                      {/* COLUMNA IZQUIERDA: SCORE FINANCIERO PERSONAL */}
+                      <div className="lg:col-span-5 flex flex-col gap-4">
+                        {/* Score Financiero Personal */}
+                        <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col items-center text-center gap-5">
+                          <div className="absolute top-[-10%] left-[-10%] w-[120px] h-[120px] bg-blue-500/10 rounded-full blur-2xl pointer-events-none"></div>
                           
-                          const totalMax = Math.max(totInc, totExp);
-                          const incPercent = (totInc / totalMax) * 100;
-                          const expPercent = (totExp / totalMax) * 100;
+                          <div className="w-full text-left">
+                            <h3 className="font-extrabold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-2">Score Financiero Personal</h3>
+                            <p className="text-[10px] text-slate-400 mt-1">Algoritmo inteligente basado en tu balance, deudas y nivel de ahorro.</p>
+                          </div>
 
-                          return (
-                            <div className="flex flex-col gap-4 py-2">
-                              {/* Barra Ingresos */}
-                              <div className="flex flex-col gap-1.5">
-                                <div className="flex justify-between text-xs">
-                                  <span className="text-slate-400">Total Ingresos Mensuales</span>
-                                  <strong className="text-emerald-400 font-mono">${totInc.toLocaleString('es-CO')}</strong>
-                                </div>
-                                <div className="w-full h-3 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                                  <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${incPercent}%` }}></div>
-                                </div>
-                              </div>
+                          {/* Medidor Circular Visual */}
+                          <div className="flex flex-col items-center gap-3">
+                            <div className="relative w-40 h-40 flex items-center justify-center">
+                              {/* SVG Arc */}
+                              <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
+                                {/* Círculo fondo */}
+                                <circle cx="50" cy="50" r="40" stroke="rgba(255,255,255,0.03)" strokeWidth="8" fill="transparent" />
+                                {/* Círculo relleno */}
+                                <circle 
+                                  cx="50" 
+                                  cy="50" 
+                                  r="40" 
+                                  stroke="url(#scoreGradient)" 
+                                  strokeWidth="8" 
+                                  fill="transparent" 
+                                  strokeDasharray="251.2"
+                                  strokeDashoffset={scoreDashoffset}
+                                  strokeLinecap="round"
+                                  className="transition-all duration-1000 ease-out"
+                                />
+                                <defs>
+                                  <linearGradient id="scoreGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stopColor="#f43f5e" />
+                                    <stop offset="50%" stopColor="#f59e0b" />
+                                    <stop offset="100%" stopColor="#10b981" />
+                                  </linearGradient>
+                                </defs>
+                              </svg>
 
-                              {/* Barra Gastos */}
-                              <div className="flex flex-col gap-1.5">
-                                <div className="flex justify-between text-xs">
-                                  <span className="text-slate-400">Total Gastos/Egresos Mensuales</span>
-                                  <strong className="text-rose-400 font-mono">${totExp.toLocaleString('es-CO')}</strong>
-                                </div>
-                                <div className="w-full h-3 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                                  <div className="h-full bg-rose-500 rounded-full" style={{ width: `${expPercent}%` }}></div>
-                                </div>
+                              <div className="absolute flex flex-col items-center justify-center">
+                                <span className="text-3xl font-black text-white font-mono">{score}</span>
+                                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Escala CIFIN</span>
                               </div>
                             </div>
-                          );
-                        })()}
+
+                            <div className="flex flex-col items-center">
+                              <span className={`text-sm font-extrabold uppercase tracking-wide ${colorClass}`}>{level}</span>
+                              <span className="text-[10px] text-slate-400 mt-1">Análisis algorítmico en tiempo real.</span>
+                            </div>
+                          </div>
+
+                          {/* Score Breakdown Analysis */}
+                          <div className="w-full flex flex-col gap-2 text-xs text-left border-t border-white/5 pt-4 mt-1">
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-400">Tasa de Ahorro</span>
+                              <span className={`font-bold ${savingsColor}`}>{savingsLabel}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-400">Razón de Endeudamiento</span>
+                              <span className={`font-bold ${debtColor}`}>{debtLabel}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-400">Cumplimiento de Presupuestos</span>
+                              <span className={`font-bold ${complianceColor}`}>{complianceLabel}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* AI Insights & Recomendaciones */}
+                        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
+                          <h4 className="font-bold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-1.5 flex items-center gap-2">
+                            <Sparkles className="w-4 h-4 text-emerald-400" />
+                            Insights de Inteligencia Financiera
+                          </h4>
+
+                          <div className="flex flex-col gap-3 text-xs mt-1">
+                            <div className="p-3 bg-white/5 border border-white/5 hover:border-white/10 rounded-xl leading-relaxed text-slate-300">
+                              💡 <strong>Distribución de Egresos:</strong> {insight1Text}
+                            </div>
+
+                            <div className="p-3 bg-white/5 border border-white/5 hover:border-white/10 rounded-xl leading-relaxed text-slate-300">
+                              📈 <strong>Metas de Ahorro:</strong> {insight2Text}
+                            </div>
+
+                            <div className="p-3 bg-white/5 border border-white/5 hover:border-white/10 rounded-xl leading-relaxed text-slate-300">
+                              🛡️ <strong>Gastos Hormiga y Suscripciones:</strong> {insight3Text}
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </motion.div>
-                )}
+
+                      {/* COLUMNA DERECHA: GRÁFICOS INTERACTIVOS DE INGRESOS, GASTOS Y CATEGORÍAS */}
+                      <div className="lg:col-span-7 flex flex-col gap-4">
+                        {/* Gráfico de Categorías Circular (Dona) */}
+                        <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
+                          <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                            <h4 className="font-bold text-white text-xs tracking-wider uppercase">Distribución de Gastos Mensuales</h4>
+                            {displayUsingFallback && (
+                              <span className="text-[9px] font-mono text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20">Ejemplo (Sin transacciones)</span>
+                            )}
+                          </div>
+
+                          {/* SVG Pie Chart Premium e Interactivo */}
+                          <div className="flex flex-col sm:flex-row items-center gap-6 py-2">
+                            {/* SVG Donut */}
+                            <div className="w-40 h-40 shrink-0 relative flex items-center justify-center">
+                              {(() => {
+                                let accumulatedOffset = 0;
+                                return (
+                                  <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
+                                    <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="rgba(255,255,255,0.03)" strokeWidth="4" />
+                                    {finalCategoryDistribution.map((item, idx) => {
+                                      const pct = item.percentage;
+                                      if (pct <= 0) return null;
+                                      const offset = accumulatedOffset;
+                                      accumulatedOffset += pct;
+                                      return (
+                                        <circle 
+                                          key={idx}
+                                          cx="18" 
+                                          cy="18" 
+                                          r="15.915" 
+                                          fill="transparent" 
+                                          stroke={item.color} 
+                                          strokeWidth="4" 
+                                          strokeDasharray={`${pct} ${100 - pct}`} 
+                                          strokeDashoffset={-offset} 
+                                          className="transition-all duration-500"
+                                        />
+                                      );
+                                    })}
+                                  </svg>
+                                );
+                              })()}
+                              <div className="absolute flex flex-col items-center">
+                                <span className="text-xl font-black text-white font-mono">100%</span>
+                                <span className="text-[8px] text-slate-500 font-bold uppercase">Clasificado</span>
+                              </div>
+                            </div>
+
+                            {/* Legend / Table Breakdown */}
+                            <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2.5 text-xs max-h-40 overflow-y-auto pr-1">
+                              {finalCategoryDistribution.map((item, idx) => (
+                                <div key={idx} className="flex items-center justify-between gap-2 border-b border-white/5 pb-1 sm:pb-0 sm:border-0 truncate">
+                                  <div className="flex items-center gap-2 truncate">
+                                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.color }}></span>
+                                    <span className="text-slate-400 truncate">{item.category}</span>
+                                  </div>
+                                  <span className="text-white font-bold ml-1 shrink-0">{item.percentage}%</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Gráfico Histórico de Gastos: Últimos 12 meses */}
+                        <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
+                          <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                            <h4 className="font-bold text-white text-xs tracking-wider uppercase">Tendencia de Gastos (Últimos 12 Meses)</h4>
+                            <span className="text-[10px] font-mono text-slate-500">Historial de egresos</span>
+                          </div>
+
+                          {/* Interactive SVG Bar chart columns */}
+                          <div className="w-full overflow-x-auto pb-1.5 scrollbar-thin">
+                            <div className="h-44 min-w-[480px] sm:min-w-0 w-full flex items-end gap-2 sm:gap-3.5 pt-4">
+                              {finalHistoricalData.map((item, i) => {
+                                const percentHeight = `${(item.value / maxHistVal) * 85}%`;
+                                const isCurrent = i === 11;
+                                return (
+                                  <div key={i} className="flex-1 flex flex-col items-center gap-1.5 group cursor-pointer h-full justify-end">
+                                    <div className="w-full relative h-full flex items-end">
+                                      <div 
+                                        className={`w-full rounded-t-lg transition-all duration-500 relative ${isCurrent ? 'bg-emerald-500 shadow-md shadow-emerald-500/10' : 'bg-white/10 hover:bg-white/20'}`} 
+                                        style={{ height: percentHeight }}
+                                      >
+                                        {/* Tooltip on hover */}
+                                        <div className="absolute bottom-[calc(100%+6px)] left-1/2 -translate-x-1/2 scale-0 group-hover:scale-100 bg-slate-900 border border-white/10 px-2 py-1 rounded text-[9px] font-mono text-emerald-400 whitespace-nowrap z-30 transition-all pointer-events-none shadow-xl">
+                                          {item.displayValue}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <span className="text-[8px] sm:text-[9px] text-slate-500 font-mono tracking-tighter truncate w-full text-center">
+                                      {item.label}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Gráfico Comparativo: Ingresos vs Gastos */}
+                        <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4">
+                          <h4 className="font-bold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-2">Balance Contable Mensual (Ingresos vs Gastos)</h4>
+
+                          <div className="flex flex-col gap-4 py-2">
+                            {/* Barra Ingresos */}
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex justify-between text-xs">
+                                <span className="text-slate-400">Total Ingresos Mensuales (Mes Actual)</span>
+                                <strong className="text-emerald-400 font-mono">${(currentMonthTxs.filter(t => t.type === 'income' || t.tipo === 'ingreso').reduce((sum, t) => sum + t.amount, 0)).toLocaleString('es-CO')}</strong>
+                              </div>
+                              <div className="w-full h-3 bg-white/5 rounded-full overflow-hidden border border-white/5">
+                                <div 
+                                  className="h-full bg-emerald-500 rounded-full transition-all duration-500" 
+                                  style={{ 
+                                    width: `${(() => {
+                                      const inc = currentMonthTxs.filter(t => t.type === 'income' || t.tipo === 'ingreso').reduce((sum, t) => sum + t.amount, 0);
+                                      const exp = currentMonthTxs.filter(t => t.type === 'expense' || t.tipo === 'egreso').reduce((sum, t) => sum + t.amount, 0);
+                                      const m = Math.max(inc, exp, 1);
+                                      return (inc / m) * 100;
+                                    })()}%` 
+                                  }}
+                                ></div>
+                              </div>
+                            </div>
+
+                            {/* Barra Gastos */}
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex justify-between text-xs">
+                                <span className="text-slate-400">Total Gastos/Egresos Mensuales (Mes Actual)</span>
+                                <strong className="text-rose-400 font-mono">${(currentMonthTxs.filter(t => t.type === 'expense' || t.tipo === 'egreso').reduce((sum, t) => sum + t.amount, 0)).toLocaleString('es-CO')}</strong>
+                              </div>
+                              <div className="w-full h-3 bg-white/5 rounded-full overflow-hidden border border-white/5">
+                                <div 
+                                  className="h-full bg-rose-500 rounded-full transition-all duration-500" 
+                                  style={{ 
+                                    width: `${(() => {
+                                      const inc = currentMonthTxs.filter(t => t.type === 'income' || t.tipo === 'ingreso').reduce((sum, t) => sum + t.amount, 0);
+                                      const exp = currentMonthTxs.filter(t => t.type === 'expense' || t.tipo === 'egreso').reduce((sum, t) => sum + t.amount, 0);
+                                      const m = Math.max(inc, exp, 1);
+                                      return (exp / m) * 100;
+                                    })()}%` 
+                                  }}
+                                ></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })()}
 
                 {/* 7. MÓDULO: REPORTES */}
                 {activeModule === 'reportes' && (
@@ -5023,139 +5875,80 @@ export class DashboardComponent {
 
                       return (
                         <>
-                          {/* SECCIÓN 1: SALUD FINANCIERA */}
+                          {/* SECCIÓN 1: SALUD FINANCIERA GENERAL */}
                           <div className="flex flex-col gap-3">
                             <h3 className="text-[11px] font-bold text-slate-400 tracking-wider uppercase flex items-center gap-2">
                               <Activity className="w-4 h-4 text-emerald-400" />
                               Salud Financiera General
                             </h3>
-                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                              {/* Saldo Total */}
-                              <div className="bg-gradient-to-br from-emerald-500/10 to-transparent border border-emerald-500/20 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[120px]">
+                            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                              {/* Total Disponible */}
+                              <div className="bg-white/5 border border-white/10 rounded-2xl p-4 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px] hover:border-white/20 transition-all duration-300">
                                 <div>
-                                  <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Saldo Total</div>
-                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-white leading-none break-all">
-                                    {formatValue(saldoTotal)}
+                                  <div className="text-[9px] font-bold text-slate-400 tracking-wider uppercase">Total Disponible</div>
+                                  <div className="text-base sm:text-lg md:text-xl font-black mt-2 tracking-tight text-white leading-none break-all">
+                                    {formatValue(disponible)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Sumatoria de fondos</p>
-                                <div className="absolute right-4 top-4 bg-emerald-500/10 p-2 rounded-xl border border-emerald-500/10 text-emerald-400">
+                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Fondos líquidos activos</p>
+                                <div className="absolute right-4 top-4 bg-blue-500/10 p-2 rounded-xl border border-blue-500/10 text-blue-400">
                                   <Wallet className="w-4 h-4" />
                                 </div>
                               </div>
 
-                              {/* Disponible */}
-                              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[120px]">
+                              {/* Total Ingresado este mes */}
+                              <div className="bg-white/5 border border-white/10 rounded-2xl p-4 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px] hover:border-white/20 transition-all duration-300">
                                 <div>
-                                  <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Disponible</div>
-                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-white leading-none break-all">
-                                    {formatValue(disponible)}
+                                  <div className="text-[9px] font-bold text-slate-400 tracking-wider uppercase">Total Ingresado este mes</div>
+                                  <div className="text-base sm:text-lg md:text-xl font-black mt-2 tracking-tight text-emerald-400 leading-none break-all">
+                                    {formatValue(ingresosMes)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Saldos líquidos activos</p>
-                                <div className="absolute right-4 top-4 bg-blue-500/10 p-2 rounded-xl border border-blue-500/10 text-blue-400">
-                                  <TrendingUp className="w-4 h-4" />
+                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Depósitos de este período</p>
+                                <div className="absolute right-4 top-4 bg-emerald-500/10 p-2 rounded-xl border border-emerald-500/10 text-emerald-400">
+                                  <ArrowUpRight className="w-4 h-4" />
                                 </div>
                               </div>
 
-                              {/* Deudas */}
-                              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[120px]">
+                              {/* Total Gastado este mes */}
+                              <div className="bg-white/5 border border-white/10 rounded-2xl p-4 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px] hover:border-white/20 transition-all duration-300">
                                 <div>
-                                  <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Deudas</div>
-                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-rose-400 leading-none break-all">
+                                  <div className="text-[9px] font-bold text-slate-400 tracking-wider uppercase">Total Gastado este mes</div>
+                                  <div className="text-base sm:text-lg md:text-xl font-black mt-2 tracking-tight text-rose-400 leading-none break-all">
+                                    {formatValue(gastosMes)}
+                                  </div>
+                                </div>
+                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Pagos y egresos acumulados</p>
+                                <div className="absolute right-4 top-4 bg-red-500/10 p-2 rounded-xl border border-red-500/10 text-red-400">
+                                  <ArrowDownRight className="w-4 h-4" />
+                                </div>
+                              </div>
+
+                              {/* Total Deudas */}
+                              <div className="bg-white/5 border border-white/10 rounded-2xl p-4 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px] hover:border-white/20 transition-all duration-300">
+                                <div>
+                                  <div className="text-[9px] font-bold text-slate-400 tracking-wider uppercase">Total Deudas</div>
+                                  <div className="text-base sm:text-lg md:text-xl font-black mt-2 tracking-tight text-rose-400 leading-none break-all">
                                     {formatValue(deudas)}
                                   </div>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Tarjetas y pasivos</p>
+                                <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Obligaciones pendientes</p>
                                 <div className="absolute right-4 top-4 bg-red-500/10 p-2 rounded-xl border border-red-500/10 text-red-400">
                                   <CreditCard className="w-4 h-4" />
                                 </div>
                               </div>
 
-                              {/* Ahorros */}
-                              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[120px]">
+                              {/* Total Ahorrado */}
+                              <div className="bg-white/5 border border-white/10 rounded-2xl p-4 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px] hover:border-white/20 transition-all duration-300">
                                 <div>
-                                  <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Ahorros</div>
-                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-emerald-400 leading-none break-all">
+                                  <div className="text-[9px] font-bold text-slate-400 tracking-wider uppercase">Total Ahorrado</div>
+                                  <div className="text-base sm:text-lg md:text-xl font-black mt-2 tracking-tight text-blue-400 leading-none break-all">
                                     {formatValue(ahorros)}
                                   </div>
                                 </div>
                                 <p className="text-[10px] text-slate-500 mt-3 line-clamp-1">Reservas designadas</p>
-                                <div className="absolute right-4 top-4 bg-amber-500/10 p-2 rounded-xl border border-amber-500/10 text-amber-400">
+                                <div className="absolute right-4 top-4 bg-blue-500/10 p-2 rounded-xl border border-blue-500/10 text-blue-400">
                                   <Sparkles className="w-4 h-4" />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* SECCIÓN 2: RENDIMIENTO ESTE MES */}
-                          <div className="flex flex-col gap-3">
-                            <h3 className="text-[11px] font-bold text-slate-400 tracking-wider uppercase flex items-center gap-2">
-                              <Calendar className="w-4 h-4 text-indigo-400" />
-                              Desempeño del Período
-                            </h3>
-                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                              {/* 💰 Ingresos este mes */}
-                              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px]">
-                                <div>
-                                  <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-1.5">
-                                    <span>💰</span> Ingresos
-                                  </div>
-                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-emerald-400 leading-none break-all">
-                                    {formatValue(ingresosMes)}
-                                  </div>
-                                </div>
-                                <p className="text-[10px] text-slate-500 mt-2 line-clamp-1">Depósitos del mes</p>
-                                <div className="absolute right-4 top-4 bg-emerald-500/10 p-1.5 rounded-lg text-emerald-400">
-                                  <ArrowUpRight className="w-3.5 h-3.5" />
-                                </div>
-                              </div>
-
-                              {/* 💸 Gastos este mes */}
-                              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px]">
-                                <div>
-                                  <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-1.5">
-                                    <span>💸</span> Gastos
-                                  </div>
-                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-red-400 leading-none break-all">
-                                    {formatValue(gastosMes)}
-                                  </div>
-                                </div>
-                                <p className="text-[10px] text-slate-500 mt-2 line-clamp-1">Pagos del mes</p>
-                                <div className="absolute right-4 top-4 bg-red-500/10 p-1.5 rounded-lg text-red-400">
-                                  <ArrowDownRight className="w-3.5 h-3.5" />
-                                </div>
-                              </div>
-
-                              {/* 📈 Ahorro del mes */}
-                              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px]">
-                                <div>
-                                  <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-1.5">
-                                    <span>📈</span> Ahorro
-                                  </div>
-                                  <div className={`text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight leading-none break-all ${ahorroMes >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                    {formatValue(ahorroMes)}
-                                  </div>
-                                </div>
-                                <p className="text-[10px] text-slate-500 mt-2 line-clamp-1">Superávit acumulado</p>
-                                <div className={`absolute right-4 top-4 p-1.5 rounded-lg ${ahorroMes >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-                                  <TrendingUp className="w-3.5 h-3.5" />
-                                </div>
-                              </div>
-
-                              {/* 📊 Patrimonio actual */}
-                              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[110px]">
-                                <div>
-                                  <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-1.5">
-                                    <span>📊</span> Patrimonio
-                                  </div>
-                                  <div className="text-lg sm:text-xl md:text-2xl lg:text-xl xl:text-2xl font-black mt-2 tracking-tight text-indigo-400 leading-none break-all">
-                                    {formatValue(patrimonioActual)}
-                                  </div>
-                                </div>
-                                <p className="text-[10px] text-slate-500 mt-2 line-clamp-1">Valor neto real</p>
-                                <div className="absolute right-4 top-4 bg-indigo-500/10 p-1.5 rounded-lg text-indigo-400">
-                                  <Layers className="w-3.5 h-3.5" />
                                 </div>
                               </div>
                             </div>
@@ -5801,6 +6594,178 @@ export class DashboardComponent {
                         );
                       })()}
                     </div>
+
+                    {/* PANEL INFERIOR: DÉBITOS AUTOMÁTICOS DE CUENTAS */}
+                    <div className="lg:col-span-12 flex flex-col gap-4 mt-2">
+                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
+                          <div>
+                            <h3 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                              <Zap className="w-4.5 h-4.5 text-yellow-400" />
+                              Débitos Automáticos y Pagos Programados
+                            </h3>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              Asocia cobros recurrentes a tus cuentas. Si una cuenta no tiene suficiente saldo en el día programado, recibirás una notificación de alerta en tu dispositivo.
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => processAutomaticDebits(true)}
+                              className="bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 border border-yellow-500/20 font-bold px-3 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                              title="Verificar fechas de cobro y validar saldos disponibles"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              Procesar Débitos
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (accounts.length > 0) {
+                                  setNewDebitAccountId(accounts[0].id);
+                                }
+                                setIsAddDebitModalOpen(true);
+                              }}
+                              className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+                            >
+                              <PlusCircle className="w-4 h-4" />
+                              Nuevo Débito Automático
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Banner informativo de alertas si hay débitos con fondos insuficientes */}
+                        {dbAutomaticDebits.some(d => d.active && d.status === 'insufficient_funds') && (
+                          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3.5 flex items-center justify-between gap-3 text-red-300 text-xs animate-pulse">
+                            <div className="flex items-center gap-2">
+                              <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+                              <span>
+                                <strong>¡Alerta de Débito Fallido!</strong> Se detectó saldo insuficiente en la cuenta para procesar uno o más débitos automáticos.
+                              </span>
+                            </div>
+                            <button
+                              onClick={requestNotificationPermission}
+                              className="bg-red-500 text-slate-950 font-bold text-[10px] px-2.5 py-1 rounded-lg shrink-0 cursor-pointer"
+                            >
+                              Verificar Notificaciones
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Listado de Débitos Automáticos */}
+                        {dbAutomaticDebits.length === 0 ? (
+                          <div className="text-center py-8 flex flex-col items-center justify-center gap-2 bg-slate-950/20 rounded-xl border border-white/5 p-6">
+                            <Clock className="w-8 h-8 text-slate-600" />
+                            <p className="text-xs text-slate-400 font-medium">No has configurado ningún débito automático.</p>
+                            <p className="text-[10px] text-slate-600 max-w-sm">
+                              Agrega pagos de servicios, suscripciones o facturas mensuales que se liquiden directamente desde el saldo de tus cuentas.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                            {dbAutomaticDebits.map((debit) => {
+                              const acc = accounts.find(a => a.id === debit.accountId);
+                              const hasInsufficientFunds = debit.active && acc && acc.saldo < debit.amount;
+                              const isExecutedThisMonth = debit.lastExecutedDate === new Date().toISOString().slice(0, 7);
+
+                              return (
+                                <div
+                                  key={debit.id}
+                                  className={`p-4 rounded-xl border transition-all flex flex-col gap-3 relative ${
+                                    hasInsufficientFunds
+                                      ? 'bg-red-500/10 border-red-500/30 shadow-lg shadow-red-500/5'
+                                      : isExecutedThisMonth
+                                      ? 'bg-emerald-500/5 border-emerald-500/20'
+                                      : 'bg-slate-950/40 border-white/10 hover:border-white/20'
+                                  }`}
+                                >
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div>
+                                      <h4 className="font-bold text-white text-xs">{debit.name}</h4>
+                                      <span className="text-[9px] text-slate-400 font-mono block mt-0.5">
+                                        {debit.category} • Día {debit.dayOfMonth} de cada mes
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleAutomaticDebit(debit.id, debit.active)}
+                                        className={`p-1.5 rounded-lg text-xs cursor-pointer transition-all ${
+                                          debit.active ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20' : 'text-slate-500 bg-white/5 hover:bg-white/10'
+                                        }`}
+                                        title={debit.active ? 'Pausar Débito' : 'Activar Débito'}
+                                      >
+                                        {debit.active ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteAutomaticDebit(debit.id)}
+                                        className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all cursor-pointer"
+                                        title="Eliminar Débito Automático"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex justify-between items-end border-t border-white/5 pt-2 mt-0.5">
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block uppercase font-mono">Monto a Debitar</span>
+                                      <span className="text-base font-extrabold text-white">
+                                        ${debit.amount.toLocaleString('es-CO')}
+                                      </span>
+                                    </div>
+
+                                    <div className="text-right">
+                                      <span className="text-[9px] text-slate-400 block font-mono">Cuenta Origen</span>
+                                      <span className="text-xs font-bold text-emerald-400 truncate max-w-[120px] block">
+                                        {acc ? acc.nombre : 'Sin cuenta'}
+                                      </span>
+                                      {acc && (
+                                        <span className={`text-[9px] font-mono block ${acc.saldo < debit.amount ? 'text-red-400 font-bold' : 'text-slate-400'}`}>
+                                          Saldo: ${acc.saldo.toLocaleString('es-CO')}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Badges de Estado */}
+                                  <div className="flex items-center justify-between gap-2 mt-1 pt-2 border-t border-white/5">
+                                    {hasInsufficientFunds ? (
+                                      <span className="text-[9px] font-black uppercase text-red-400 bg-red-500/20 px-2 py-0.5 rounded border border-red-500/30 flex items-center gap-1">
+                                        🔴 Saldo Insuficiente
+                                      </span>
+                                    ) : isExecutedThisMonth ? (
+                                      <span className="text-[9px] font-bold uppercase text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 flex items-center gap-1">
+                                        ✅ Ejecutado Este Mes
+                                      </span>
+                                    ) : (
+                                      <span className="text-[9px] font-semibold text-slate-400 bg-white/5 px-2 py-0.5 rounded border border-white/5">
+                                        ⏳ Día {debit.dayOfMonth} Programado
+                                      </span>
+                                    )}
+
+                                    {debit.active && (
+                                      <button
+                                        type="button"
+                                        onClick={() => processAutomaticDebits(true)}
+                                        className="text-[9px] font-bold text-yellow-400 hover:underline flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Zap className="w-3 h-3" />
+                                        Ejecutar
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </motion.div>
                 )}
 
@@ -5925,13 +6890,18 @@ export class DashboardComponent {
                     {(() => {
                       // Aplicar filtros en memoria
                       const matched = transactions.filter(t => {
-                        if (queryStartDate && t.date && t.date.split('T')[0] < queryStartDate) return false;
-                        if (queryEndDate && t.date && t.date.split('T')[0] > queryEndDate) return false;
+                        const tDateOnly = t.date ? t.date.split('T')[0] : '';
+                        if (queryStartDate && (!tDateOnly || tDateOnly < queryStartDate)) return false;
+                        if (queryEndDate && (!tDateOnly || tDateOnly > queryEndDate)) return false;
                         if (queryAccountId !== 'ALL') {
                           const tAccId = (t as any).accountId || (t as any).cuentaId;
                           if (tAccId !== queryAccountId) return false;
                         }
-                        if (queryCategory !== 'ALL' && t.category !== queryCategory) return false;
+                        if (queryCategory !== 'ALL') {
+                          const tCatName = getCategoryDetails(t.category || '').name.toLowerCase().trim();
+                          const qCatName = getCategoryDetails(queryCategory).name.toLowerCase().trim();
+                          if (tCatName !== qCatName) return false;
+                        }
                         return true;
                       });
 
@@ -6120,6 +7090,86 @@ export class DashboardComponent {
                           Cerrar Sesión Activa
                         </button>
                       </div>
+
+                      {/* TARJETA DE PREFERENCIAS Y APARIENCIA */}
+                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-4 relative overflow-hidden">
+                        <div className="absolute top-[-10%] right-[-10%] w-[120px] h-[120px] bg-indigo-500/5 rounded-full blur-2xl pointer-events-none"></div>
+                        
+                        <h4 className="font-bold text-white text-xs tracking-wider uppercase border-b border-white/5 pb-2 flex items-center gap-2">
+                          <Settings className="w-4 h-4 text-indigo-400" />
+                          Preferencias del Sistema
+                        </h4>
+
+                        <form onSubmit={handleUpdateUserProfile} className="flex flex-col gap-4 text-xs">
+                          {/* Nombre */}
+                          <div>
+                            <label className="block text-[10px] font-semibold text-slate-400 mb-1.5 uppercase">Nombre de Usuario</label>
+                            <input
+                              type="text"
+                              value={userProfileName}
+                              onChange={(e) => setUserProfileName(e.target.value)}
+                              placeholder="Tu nombre o alias"
+                              className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-2 px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                              required
+                            />
+                          </div>
+
+                          {/* Moneda */}
+                          <div>
+                            <label className="block text-[10px] font-semibold text-slate-400 mb-1.5 uppercase">Moneda de Visualización</label>
+                            <select
+                              value={userProfileCurrency}
+                              onChange={(e) => setUserProfileCurrency(e.target.value)}
+                              className="w-full bg-slate-950/40 border border-white/10 rounded-xl py-2 px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                            >
+                              <option value="COP" className="bg-slate-900 text-white">COP ($ - Pesos Colombianos)</option>
+                              <option value="USD" className="bg-slate-900 text-white">USD ($ - Dólares Estadounidenses)</option>
+                              <option value="EUR" className="bg-slate-900 text-white">EUR (€ - Euros)</option>
+                              <option value="MXN" className="bg-slate-900 text-white">MXN ($ - Pesos Mexicanos)</option>
+                              <option value="ARS" className="bg-slate-900 text-white">ARS ($ - Pesos Argentinos)</option>
+                            </select>
+                          </div>
+
+                          {/* Tema (Modo Claro vs Modo Oscuro) */}
+                          <div>
+                            <label className="block text-[10px] font-semibold text-slate-400 mb-1.5 uppercase">Tema / Apariencia</label>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setUserProfileTheme('light')}
+                                className={`py-2 px-3 rounded-xl border font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                                  userProfileTheme === 'light'
+                                    ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                                    : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-white'
+                                }`}
+                              >
+                                <Sun className="w-3.5 h-3.5" />
+                                Modo Claro
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setUserProfileTheme('dark')}
+                                className={`py-2 px-3 rounded-xl border font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                                  userProfileTheme === 'dark'
+                                    ? 'bg-indigo-600 text-white border-indigo-500'
+                                    : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-white'
+                                }`}
+                              >
+                                <Moon className="w-3.5 h-3.5" />
+                                Modo Oscuro
+                              </button>
+                            </div>
+                          </div>
+
+                          <button
+                            type="submit"
+                            disabled={userProfileLoading}
+                            className="w-full bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-slate-950 py-2.5 rounded-xl text-xs font-extrabold shadow-lg hover:shadow-emerald-500/15 cursor-pointer flex items-center justify-center gap-1.5 mt-2 transition-all"
+                          >
+                            {userProfileLoading ? 'Guardando...' : 'Guardar Preferencias'}
+                          </button>
+                        </form>
+                      </div>
                     </div>
 
                     {/* ESTADÍSTICAS Y KPI DEL PERFIL (DERECHA) */}
@@ -6176,6 +7226,398 @@ export class DashboardComponent {
                             <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
                               Tus datos financieros están totalmente protegidos. Las reglas de seguridad de Firestore (Rules) restringen el acceso a las subcolecciones para que solo tú puedas ver o escribir información vinculada a tu identificador único de usuario.
                             </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* SECCIÓN DEL MANUAL DE USUARIO EN PDF */}
+                    <div className="lg:col-span-12 flex flex-col gap-4 mt-2">
+                      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col gap-5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
+                          <div>
+                            <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                              <BookOpen className="w-4.5 h-4.5 text-emerald-400" />
+                              Manual de Usuario ContabilidApp v2.0 (Documento PDF)
+                            </h4>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              Consulta la guía completa de uso del sistema, procedimientos de seguridad E2EE y configuración de notificaciones.
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOnboardingStep(0);
+                                setIsOnboardingModalOpen(true);
+                              }}
+                              className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                            >
+                              <Compass className="w-3.5 h-3.5" />
+                              Abrir Tutorial Interactivo
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleDownloadUserManualPDF}
+                              className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-lg hover:shadow-emerald-500/20"
+                            >
+                              <Download className="w-3.5 h-3.5 stroke-[3px]" />
+                              Descargar PDF
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* VISOR DE PDF INTERACTIVO */}
+                        <div className={`bg-slate-950 border border-white/10 rounded-2xl overflow-hidden flex flex-col ${isPdfFullscreen ? 'fixed inset-4 z-50 shadow-2xl' : 'relative'}`}>
+                          {/* BARRA DE HERRAMIENTAS DEL VISOR PDF */}
+                          <div className="bg-slate-900 border-b border-white/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                            <div className="flex items-center gap-2">
+                              <FileText className="w-4 h-4 text-emerald-400" />
+                              <span className="font-mono font-bold text-white text-xs">Manual_de_Usuario_ContabilidApp.pdf</span>
+                              <span className="text-[10px] font-mono text-slate-400 bg-white/5 px-2 py-0.5 rounded border border-white/5">
+                                5 Páginas • v2.0
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {/* Control de Páginas */}
+                              <div className="flex items-center bg-white/5 rounded-lg border border-white/10 p-1">
+                                <button
+                                  type="button"
+                                  disabled={pdfPage <= 1}
+                                  onClick={() => setPdfPage(p => Math.max(1, p - 1))}
+                                  className="p-1 hover:bg-white/10 disabled:opacity-30 text-white rounded transition-colors cursor-pointer"
+                                  title="Página Anterior"
+                                >
+                                  <ChevronLeft className="w-3.5 h-3.5" />
+                                </button>
+                                <span className="px-2.5 font-mono text-[11px] font-bold text-slate-200">
+                                  Pág. {pdfPage} de {totalPdfPages}
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={pdfPage >= totalPdfPages}
+                                  onClick={() => setPdfPage(p => Math.min(totalPdfPages, p + 1))}
+                                  className="p-1 hover:bg-white/10 disabled:opacity-30 text-white rounded transition-colors cursor-pointer"
+                                  title="Página Siguiente"
+                                >
+                                  <ChevronRight className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+
+                              {/* Control de Zoom */}
+                              <div className="hidden sm:flex items-center bg-white/5 rounded-lg border border-white/10 p-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setPdfZoom(z => Math.max(75, z - 15))}
+                                  className="p-1 hover:bg-white/10 text-white rounded transition-colors cursor-pointer"
+                                  title="Reducir Zoom"
+                                >
+                                  <ZoomOut className="w-3.5 h-3.5" />
+                                </button>
+                                <span className="px-2 font-mono text-[10px] font-bold text-slate-300">
+                                  {pdfZoom}%
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setPdfZoom(z => Math.min(150, z + 15))}
+                                  className="p-1 hover:bg-white/10 text-white rounded transition-colors cursor-pointer"
+                                  title="Aumentar Zoom"
+                                >
+                                  <ZoomIn className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+
+                              {/* Imprimir */}
+                              <button
+                                type="button"
+                                onClick={() => window.print()}
+                                className="p-1.5 hover:bg-white/10 text-slate-300 hover:text-white rounded-lg border border-white/10 transition-colors cursor-pointer"
+                                title="Imprimir Documento"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Pantalla Completa */}
+                              <button
+                                type="button"
+                                onClick={() => setIsPdfFullscreen(!isPdfFullscreen)}
+                                className="p-1.5 hover:bg-white/10 text-slate-300 hover:text-white rounded-lg border border-white/10 transition-colors cursor-pointer"
+                                title={isPdfFullscreen ? "Salir de Pantalla Completa" : "Pantalla Completa"}
+                              >
+                                {isPdfFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* CONTENEDOR DE LA PÁGINA ESTILO DOCUMENTO PDF A4 */}
+                          <div className="p-6 md:p-10 overflow-auto max-h-[600px] flex justify-center bg-slate-950/80">
+                            <div 
+                              style={{ transform: `scale(${pdfZoom / 100})`, transformOrigin: 'top center' }}
+                              className="w-full max-w-3xl bg-[#0b132b] border border-white/10 rounded-xl p-8 shadow-2xl text-slate-200 transition-all duration-200 min-h-[500px] flex flex-col justify-between"
+                            >
+                              {/* Header de la Página PDF */}
+                              <div className="border-b border-emerald-500/20 pb-4 mb-6 flex justify-between items-center">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black text-sm">
+                                    C
+                                  </div>
+                                  <div>
+                                    <h3 className="font-extrabold text-white text-xs tracking-wider uppercase">ContabilidApp • Manual Oficial</h3>
+                                    <span className="text-[10px] text-slate-400 font-mono">Guía de Usuario v2.0 - Documento Confidencial E2EE</span>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                                  Página {pdfPage} / {totalPdfPages}
+                                </span>
+                              </div>
+
+                              {/* Contenido Dinámico por Página */}
+                              <div className="flex-1 space-y-6 text-xs text-slate-300 leading-relaxed">
+                                {pdfPage === 1 && (
+                                  <div className="space-y-4">
+                                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 text-center">
+                                      <h2 className="text-base font-black text-white tracking-tight">MANUAL DE USUARIO OFICIAL - MÓDULOS 1 Y 2</h2>
+                                      <p className="text-[11px] text-emerald-400 font-medium mt-0.5">Capítulo 1: Dashboard General y Gestor de Cuentas</p>
+                                    </div>
+
+                                    {/* Módulo 1 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <Activity className="w-3.5 h-3.5" />
+                                        1. Módulo Dashboard General
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Centro de mando visual e interactivo con métricas financieras consolidadas en tiempo real.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Ofrecer visibilidad instantánea de la liquidez total, patrimonio neto, ingresos, egresos y flujo de caja del mes.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Observa los 4 indicadores KPI superiores: Patrimonio Neto, Ingresos, Egresos y Porcentaje de Ahorro.</div>
+                                        <div>• 2. Usa los botones "Nuevo Registro" o "Transferir" para accesos directos de entrada rápida.</div>
+                                        <div>• 3. Analiza el gráfico circular de Distribución de Gastos por Categoría para identificar desvíos.</div>
+                                      </div>
+                                    </div>
+
+                                    {/* Módulo 2 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <CreditCard className="w-3.5 h-3.5" />
+                                        2. Módulo Gestor de Cuentas y Débitos Automáticos
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Administración de instrumentos financieros clasificados en Activo (Bancos/Efectivo) y Pasivo (Crédito/Deudas).</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Organizar saldos disponibles, tarjetas de crédito y programar cobros recurrentes con alertas de liquidez.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Haz clic en "Crear Cuenta". Selecciona Tipo: Activo (Ahorros/Efectivo) o Pasivo (Tarjetas/Créditos) e ingresa el Saldo Inicial.</div>
+                                        <div>• 2. Para mover fondos entre cuentas sin alterar tus ingresos/gastos globales, usa "Realizar Transferencia".</div>
+                                        <div>• 3. Débitos Automáticos: En la pestaña Débitos, registra servicios o suscripciones fijas. Si la cuenta elegida no tiene saldo suficiente el día de cobro, el sistema emitirá una alerta emergente nativa.</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {pdfPage === 2 && (
+                                  <div className="space-y-4">
+                                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 text-center">
+                                      <h2 className="text-base font-black text-white tracking-tight">MANUAL DE USUARIO OFICIAL - MÓDULOS 3 Y 4</h2>
+                                      <p className="text-[11px] text-emerald-400 font-medium mt-0.5">Capítulo 2: Movimientos y Gestor de Categorías</p>
+                                    </div>
+
+                                    {/* Módulo 3 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <Receipt className="w-3.5 h-3.5" />
+                                        3. Módulo de Movimientos y Consultas
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Bitácora central e interactiva para el registro de transacciones de Ingreso y Egreso.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Llevar la contabilidad exacta con soporte documental adjunto (facturas/recibos en PDF o imagen).</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Haz clic en "Nuevo Movimiento" y selecciona el Tipo (Ingreso / Egreso).</div>
+                                        <div>• 2. Ingresa Monto, Fecha, Categoría, Cuenta asociada y una nota explicativa.</div>
+                                        <div>• 3. Adjunta una fotografía o PDF de la factura desde la zona de carga de archivos.</div>
+                                        <div>• 4. Utiliza los filtros superiores por rango de fechas, cuenta o categoría para buscar o auditar transacciones.</div>
+                                      </div>
+                                    </div>
+
+                                    {/* Módulo 4 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <Layers className="w-3.5 h-3.5" />
+                                        4. Módulo Gestor de Categorías
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Clasificador personalizable para la organización de la procedencia y destino del dinero.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Estructurar los conceptos de gasto e ingreso con íconos y colores representativos.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. En el módulo Categorías, presiona "Agregar Categoría".</div>
+                                        <div>• 2. Selecciona si la categoría aplica para Ingresos o Egresos.</div>
+                                        <div>• 3. Asigna un Nombre (ej. Supermercado, Alquiler, Sueldo), selecciona un Ícono y un Color.</div>
+                                        <div>• 4. Guarda los cambios; la categoría estará disponible inmediatamente en Movimientos y Presupuestos.</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {pdfPage === 3 && (
+                                  <div className="space-y-4">
+                                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 text-center">
+                                      <h2 className="text-base font-black text-white tracking-tight">MANUAL DE USUARIO OFICIAL - MÓDULOS 5 Y 6</h2>
+                                      <p className="text-[11px] text-emerald-400 font-medium mt-0.5">Capítulo 3: Presupuestos Mensuales y Metas de Ahorro</p>
+                                    </div>
+
+                                    {/* Módulo 5 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <Wallet className="w-3.5 h-3.5" />
+                                        5. Módulo Control de Presupuestos
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Techos de gasto mensual asignados por categoría con monitoreo de consumo en tiempo real.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Prevenir sobrecostos y mantener tus egresos dentro de límites previamente planificados.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Presiona "Crear Presupuesto", selecciona la Categoría de egreso y el límite máximo mensual.</div>
+                                        <div>• 2. Observa la barra de estado de color: Verde (&lt;80%), Amarillo (80%-99%), Rojo (100% o más).</div>
+                                        <div>• 3. Notificaciones Nativas: Activa las notificaciones del navegador en Configuración para recibir alertas emergentes automáticas en tu dispositivo al alcanzar el 80% y 100% del límite.</div>
+                                      </div>
+                                    </div>
+
+                                    {/* Módulo 6 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <Target className="w-3.5 h-3.5" />
+                                        6. Módulo Metas de Ahorro
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Módulo de reserva de capital para proyectos u objetivos financieros a mediano y largo plazo.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Fomentar el hábito del ahorro estructurado (Fondo de Emergencia, Vacaciones, Vehículo).</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Presiona "Nueva Meta de Ahorro" e ingresa el Nombre, Monto Objetivo y Fecha Límite opcional.</div>
+                                        <div>• 2. Para sumar capital, pulsa "Realizar Aporte" y selecciona la Cuenta origen desde donde se descontará el dinero.</div>
+                                        <div>• 3. Monitorea el porcentaje acumulado y la barra de progreso hacia tu meta.</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {pdfPage === 4 && (
+                                  <div className="space-y-4">
+                                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 text-center">
+                                      <h2 className="text-base font-black text-white tracking-tight">MANUAL DE USUARIO OFICIAL - MÓDULOS 7 Y 8</h2>
+                                      <p className="text-[11px] text-emerald-400 font-medium mt-0.5">Capítulo 4: Control de Deudas y Suscripciones</p>
+                                    </div>
+
+                                    {/* Módulo 7 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <CreditCard className="w-3.5 h-3.5" />
+                                        7. Módulo Control de Deudas y Créditos
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Módulo de gestión integral de pasivos, préstamos bancarios, familiares y tarjetas de crédito.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Eliminar recargos por mora y mantener visibilidad constante de cuotas y fechas límites de pago.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Registra la deuda indicando Acreedor, Saldo Pendiente, Cuota Mínima, Tasa de Interés y Día de Corte/Pago.</div>
+                                        <div>• 2. Cada vez que realices un pago, selecciona "Registrar Abono" para descontar el saldo principal.</div>
+                                        <div>• 3. Revisa la insignia de alerta que aparece cuando la fecha límite de pago está a 5 días o menos.</div>
+                                      </div>
+                                    </div>
+
+                                    {/* Módulo 8 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <RefreshCw className="w-3.5 h-3.5" />
+                                        8. Módulo Control de Suscripciones
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Administración de servicios periódicos de débito automático (Streaming, Software, Gimnasio).</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Identificar fugas silenciosas de dinero por membresías no utilizadas y proyectar el costo anual.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Agrega la suscripción indicando Servicio, Valor, Periodicidad y Cuenta de Cargo.</div>
+                                        <div>• 2. Consulta el resumen de Gasto Anual Acumulado para evaluar cancelaciones u optimizaciones.</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {pdfPage === 5 && (
+                                  <div className="space-y-4">
+                                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 text-center">
+                                      <h2 className="text-base font-black text-white tracking-tight">MANUAL DE USUARIO OFICIAL - MÓDULOS 9 Y 10</h2>
+                                      <p className="text-[11px] text-emerald-400 font-medium mt-0.5">Capítulo 5: Estadísticas y Reportes Financieros</p>
+                                    </div>
+
+                                    {/* Módulo 9 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <BarChart3 className="w-3.5 h-3.5" />
+                                        9. Módulo Estadísticas y Análisis
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Visualizador gráfico analítico con gráficos de distribución y comparativos históricos.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Detectar patrones de consumo, hábitos de gasto y evaluar la capacidad de ahorro.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Explora el gráfico circular de Distribución para conocer en qué categoría se concentran tus gastos.</div>
+                                        <div>• 2. Revisa la gráfica comparativa de 12 meses para analizar la evolución de tus Ingresos vs. Egresos.</div>
+                                      </div>
+                                    </div>
+
+                                    {/* Módulo 10 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                                        10. Módulo Reportes Financieros y Exportación
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Generador de Estados Financieros estándar (Estado de Resultados, Flujo de Caja) y respaldos cifrados.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Facilitar la auditoría personal, preparación de balances y resguardo seguro de datos.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Selecciona el rango de fechas a auditar (Mes actual, Año actual o Personalizado).</div>
+                                        <div>• 2. Revisa el balance generado y haz clic en "Exportar a Excel (CSV)" para obtener tu hoja de cálculo.</div>
+                                        <div>• 3. Pulsa "Respaldar Datos JSON" para descargar una copia de seguridad cifrada en tu equipo.</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {pdfPage === 6 && (
+                                  <div className="space-y-4">
+                                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 text-center">
+                                      <h2 className="text-base font-black text-white tracking-tight">MANUAL DE USUARIO OFICIAL - MÓDULO 11 Y SEGURIDAD</h2>
+                                      <p className="text-[11px] text-emerald-400 font-medium mt-0.5">Capítulo 6: Configuración, Cifrado E2EE y FAQ</p>
+                                    </div>
+
+                                    {/* Módulo 11 */}
+                                    <div className="bg-slate-900/80 border border-white/10 rounded-xl p-4 space-y-2">
+                                      <h3 className="font-extrabold text-white text-xs border-b border-white/10 pb-1 flex items-center gap-1.5 text-emerald-400">
+                                        <Settings className="w-3.5 h-3.5" />
+                                        11. Módulo de Configuración y Seguridad
+                                      </h3>
+                                      <p><strong className="text-emerald-300">Descripción:</strong> Centro de preferencias del sistema, cifrado E2EE AES-256, notificaciones y opciones de cuenta.</p>
+                                      <p><strong className="text-yellow-300">Lo que busca:</strong> Garantizar privacidad total de la información contable y personalizar el entorno de trabajo.</p>
+                                      <div className="text-[11px] text-slate-300 bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-1">
+                                        <strong className="text-indigo-300 block">Cómo usar y configurar:</strong>
+                                        <div>• 1. Moneda Predeterminada: Define la divisa del sistema ($ COP, $ USD, € EUR, etc.).</div>
+                                        <div>• 2. Notificaciones del Sistema: Activa los permisos nativos del navegador para alertas de sobregiro.</div>
+                                        <div>• 3. Seguridad E2EE: Tu clave maestra encripta los datos localmente antes de enviarse a la base de datos.</div>
+                                        <div>• 4. Manual PDF y Guía de Inicio: Vuelve a abrir este manual o el tutorial interactivo cuando lo requieras.</div>
+                                      </div>
+                                    </div>
+
+                                    <div className="text-center pt-2 border-t border-white/10">
+                                      <p className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">FIN DEL MANUAL DE USUARIO • CONTABILIDAPP 2026</p>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Footer de la Página PDF */}
+                              <div className="border-t border-white/10 pt-4 mt-6 flex justify-between items-center text-[10px] text-slate-400 font-mono">
+                                <span>ContabilidApp © 2026</span>
+                                <span>Página {pdfPage} de {totalPdfPages}</span>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -6331,23 +7773,47 @@ export class DashboardComponent {
                     transition={{ duration: 0.15 }}
                     className="flex flex-col gap-6 w-full"
                   >
-                    {/* ENCABEZADO DE SECCIÓN CON BOTÓN REGISTRAR */}
+                    {/* ENCABEZADO DE SECCIÓN CON NOTIFICACIONES DEL DISPOSITIVO */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/40 border border-white/5 rounded-2xl p-5 shadow-lg">
                       <div>
                         <h3 className="text-sm font-black text-white tracking-wider uppercase flex items-center gap-2">
                           <PlusCircle className="w-4 h-4 text-emerald-400" />
                           Control de Presupuestos
                         </h3>
-                        <p className="text-[11px] text-slate-400 mt-1">Asigna límites de gastos mensuales a tus categorías para controlar tus finanzas de manera estricta.</p>
+                        <p className="text-[11px] text-slate-400 mt-1">Asigna límites de gastos mensuales a tus categorías y recibe alertas emergentes en tu dispositivo.</p>
                       </div>
 
-                      <button
-                        onClick={() => setIsAddBudgetModalOpen(true)}
-                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-slate-950 text-xs font-extrabold px-5 py-3 rounded-xl shadow-lg hover:shadow-emerald-500/15 cursor-pointer flex items-center justify-center gap-2 transition-all shrink-0"
-                      >
-                        <Plus className="w-4 h-4 text-slate-950 stroke-[3px]" />
-                        Nuevo Presupuesto
-                      </button>
+                      <div className="flex items-center gap-2 flex-wrap shrink-0">
+                        <button
+                          type="button"
+                          onClick={requestNotificationPermission}
+                          className={`text-xs font-bold px-3.5 py-2.5 rounded-xl border flex items-center gap-2 transition-all cursor-pointer ${
+                            notificationPermission === 'granted'
+                              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
+                              : notificationPermission === 'denied'
+                              ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                              : 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400 hover:bg-yellow-500/20'
+                          }`}
+                          title="Permisos de notificaciones emergentes del navegador / dispositivo"
+                        >
+                          <Bell className="w-3.5 h-3.5" />
+                          <span>
+                            {notificationPermission === 'granted'
+                              ? '🔔 Notificaciones Activas'
+                              : notificationPermission === 'denied'
+                              ? '🚫 Notificaciones Bloqueadas'
+                              : '🔔 Activar Notificaciones'}
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => setIsAddBudgetModalOpen(true)}
+                          className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-slate-950 text-xs font-extrabold px-5 py-2.5 rounded-xl shadow-lg hover:shadow-emerald-500/15 cursor-pointer flex items-center justify-center gap-2 transition-all shrink-0"
+                        >
+                          <Plus className="w-4 h-4 text-slate-950 stroke-[3px]" />
+                          Nuevo Presupuesto
+                        </button>
+                      </div>
                     </div>
 
                     {/* COLUMNA DERECHA: MONITOREO DE PRESUPUESTOS EN TIEMPO REAL */}
@@ -6759,9 +8225,20 @@ export class DashboardComponent {
                                       </div>
                                       <div>
                                         <h4 className="text-xs font-bold text-white tracking-wide">{debt.name}</h4>
-                                        <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-                                          {debt.type === 'card' ? 'Tarjeta de Crédito' : 'Préstamo / Otro'}
-                                        </p>
+                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                                          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
+                                            {debt.type === 'card' ? 'Tarjeta de Crédito' : 'Préstamo / Otro'}
+                                          </p>
+                                          {(debt.fechaInicio || debt.fechaCreacion) && (
+                                            <>
+                                              <span className="text-slate-600 text-[10px]">•</span>
+                                              <span className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
+                                                <Calendar className="w-3 h-3 text-emerald-400/80 shrink-0" />
+                                                Inicio: <span className="font-mono text-slate-300">{formatDateDisplay(debt.fechaInicio || debt.fechaCreacion)}</span>
+                                              </span>
+                                            </>
+                                          )}
+                                        </div>
                                       </div>
                                     </div>
 
@@ -6774,8 +8251,10 @@ export class DashboardComponent {
                                           } else {
                                             setEditingDebtId(debt.id);
                                             setEditingDebtBalance(String(debt.balance));
+                                            setEditingDebtOriginal(String(debt.originalDebt || debt.balance));
                                             setEditingDebtMinPayment(String(debt.minPayment));
                                             setEditingDebtDueDate(debt.dueDate);
+                                            setEditingDebtStartDate(debt.fechaInicio || (debt.fechaCreacion ? debt.fechaCreacion.split('T')[0] : ''));
                                           }
                                         }}
                                         className="p-1 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
@@ -6802,26 +8281,78 @@ export class DashboardComponent {
 
                                   {/* Datos del Balance */}
                                   {!isEditing ? (
-                                    <div className="grid grid-cols-2 gap-2 bg-slate-950/40 border border-white/5 rounded-xl p-3">
-                                      <div className="flex flex-col">
-                                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Saldo Pendiente</span>
-                                        <span className="text-sm font-black text-rose-400 font-mono mt-0.5">
-                                          ${debt.balance.toLocaleString('es-CO')}
-                                        </span>
+                                    <div className="flex flex-col gap-3.5 bg-slate-950/40 border border-white/5 rounded-xl p-4">
+                                      <div className="grid grid-cols-2 gap-3">
+                                        <div className="flex flex-col">
+                                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Monto Original</span>
+                                          <span className="text-xs font-bold text-slate-300 font-mono mt-0.5">
+                                            ${(debt.originalDebt || debt.balance).toLocaleString('es-CO')}
+                                          </span>
+                                        </div>
+                                        <div className="flex flex-col">
+                                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Pago Mínimo/Cuota</span>
+                                          <span className="text-xs font-bold text-slate-300 font-mono mt-0.5">
+                                            ${debt.minPayment.toLocaleString('es-CO')}
+                                          </span>
+                                        </div>
                                       </div>
-                                      <div className="flex flex-col">
-                                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Pago Mínimo/Cuota</span>
-                                        <span className="text-sm font-bold text-slate-200 font-mono mt-0.5">
-                                          ${debt.minPayment.toLocaleString('es-CO')}
-                                        </span>
+
+                                      <div className="border-t border-white/5 pt-3 grid grid-cols-2 gap-3">
+                                        <div className="flex flex-col">
+                                          <span className="text-[10px] text-rose-400 font-bold uppercase tracking-wider">Deuda Actual</span>
+                                          <span className="text-base font-black text-rose-400 font-mono mt-0.5">
+                                            ${debt.balance.toLocaleString('es-CO')}
+                                          </span>
+                                        </div>
+                                        <div className="flex flex-col">
+                                          <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Total Pagado</span>
+                                          <span className="text-base font-black text-emerald-400 font-mono mt-0.5">
+                                            ${Math.max(0, (debt.originalDebt || debt.balance) - debt.balance).toLocaleString('es-CO')}
+                                          </span>
+                                        </div>
                                       </div>
+
+                                      {/* Barra de progreso de pago */}
+                                      {(() => {
+                                        const orig = debt.originalDebt || debt.balance;
+                                        const paid = Math.max(0, orig - debt.balance);
+                                        const pct = orig > 0 ? Math.min(100, Math.round((paid / orig) * 100)) : 0;
+                                        return (
+                                          <div className="flex flex-col gap-1.5 mt-1">
+                                            <div className="flex justify-between text-[10px] font-bold">
+                                              <span className="text-slate-500 uppercase tracking-wider">Progreso de Amortización</span>
+                                              <span className="text-emerald-400 font-mono">{pct}% Pagado</span>
+                                            </div>
+                                            <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden border border-white/5">
+                                              <div 
+                                                className="bg-emerald-500 h-full rounded-full transition-all duration-500" 
+                                                style={{ width: `${pct}%` }}
+                                              />
+                                            </div>
+                                          </div>
+                                        );
+                                      })()}
                                     </div>
                                   ) : (
                                     <div className="flex flex-col gap-3 bg-slate-950/80 border border-white/10 rounded-xl p-3">
                                       <p className="text-[10px] text-slate-400 font-bold pb-1.5 border-b border-white/5">Editar valores</p>
                                       <div className="grid grid-cols-2 gap-2">
                                         <div className="flex flex-col gap-1">
-                                          <span className="text-[9px] text-slate-400 font-bold">Saldo</span>
+                                          <span className="text-[9px] text-slate-400 font-bold">Monto Original</span>
+                                          <div className="relative font-sans">
+                                            <span className="absolute left-2.5 top-1.5 text-slate-500 text-[10px] font-bold">$</span>
+                                            <input
+                                              type="text"
+                                              inputMode="numeric"
+                                              value={editingDebtOriginal}
+                                              onChange={(e) => setEditingDebtOriginal(formatNumberMask(e.target.value))}
+                                              className="w-full bg-slate-900 border border-white/10 rounded-lg py-1 pl-6 pr-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                            />
+                                          </div>
+                                        </div>
+
+                                        <div className="flex flex-col gap-1">
+                                          <span className="text-[9px] text-slate-400 font-bold">Saldo Actual</span>
                                           <div className="relative font-sans">
                                             <span className="absolute left-2.5 top-1.5 text-slate-500 text-[10px] font-bold">$</span>
                                             <input
@@ -6847,16 +8378,26 @@ export class DashboardComponent {
                                             />
                                           </div>
                                         </div>
-                                      </div>
 
-                                      <div className="flex flex-col gap-1">
-                                        <span className="text-[9px] text-slate-400 font-bold">Fecha Vencimiento</span>
-                                        <input
-                                          type="date"
-                                          value={editingDebtDueDate}
-                                          onChange={(e) => setEditingDebtDueDate(e.target.value)}
-                                          className="w-full bg-slate-900 border border-white/10 rounded-lg py-1 px-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                        />
+                                        <div className="flex flex-col gap-1">
+                                          <span className="text-[9px] text-slate-400 font-bold">Vencimiento</span>
+                                          <input
+                                            type="date"
+                                            value={editingDebtDueDate}
+                                            onChange={(e) => setEditingDebtDueDate(e.target.value)}
+                                            className="w-full bg-slate-900 border border-white/10 rounded-lg py-1 px-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500 h-[26px]"
+                                          />
+                                        </div>
+
+                                        <div className="flex flex-col gap-1 col-span-2 sm:col-span-1">
+                                          <span className="text-[9px] text-slate-400 font-bold">Fecha Generación</span>
+                                          <input
+                                            type="date"
+                                            value={editingDebtStartDate}
+                                            onChange={(e) => setEditingDebtStartDate(e.target.value)}
+                                            className="w-full bg-slate-900 border border-white/10 rounded-lg py-1 px-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500 h-[26px]"
+                                          />
+                                        </div>
                                       </div>
 
                                       <div className="flex gap-2 mt-1">
@@ -7412,6 +8953,20 @@ export class DashboardComponent {
                         />
                       </div>
                     </div>
+
+                    {/* Fecha de Inicio (Solo si es Deuda) */}
+                    {newAccountType === 'deuda' && (
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Fecha de Inicio de la Deuda</label>
+                        <input
+                          type="date"
+                          required
+                          value={newAccountDebtStartDate}
+                          onChange={(e) => setNewAccountDebtStartDate(e.target.value)}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                        />
+                      </div>
+                    )}
 
                     {/* Selector de Color */}
                     <div>
@@ -8008,9 +9563,26 @@ export class DashboardComponent {
                       />
                     </div>
 
+                    {/* Monto Original de la Deuda */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Monto Original / Inicial de la Deuda ($)</label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          required
+                          placeholder="Ej: 5.000.000"
+                          value={newDebtOriginal}
+                          onChange={(e) => setNewDebtOriginal(formatNumberMask(e.target.value))}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                        />
+                      </div>
+                    </div>
+
                     {/* Saldo Pendiente */}
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Saldo Pendiente ($)</label>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Deuda Actual / Saldo Pendiente ($)</label>
                       <div className="relative">
                         <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
                         <input
@@ -8040,6 +9612,18 @@ export class DashboardComponent {
                           className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
                         />
                       </div>
+                    </div>
+
+                    {/* Fecha de Inicio */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Fecha de Inicio de la Deuda</label>
+                      <input
+                        type="date"
+                        required
+                        value={newDebtStartDate}
+                        onChange={(e) => setNewDebtStartDate(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                      />
                     </div>
 
                     {/* Tipo y Fecha de Vencimiento */}
@@ -8092,6 +9676,369 @@ export class DashboardComponent {
                       </button>
                     </div>
                   </form>
+                </motion.div>
+              </div>
+            )}
+
+            {/* Modal para Crear Débito Automático */}
+            {isAddDebitModalOpen && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-900/40">
+                    <div>
+                      <h4 className="font-black text-white text-sm tracking-wider uppercase flex items-center gap-2">
+                        <Zap className="w-4 h-4 text-yellow-400" />
+                        Nuevo Débito Automático
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">Configura cobros recurrentes mensuales asociados a tus cuentas monetarias.</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddDebitModalOpen(false)}
+                      className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleAddAutomaticDebit} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Nombre del Débito / Servicio</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ej: Pago Servicios Públicos, Netflix, Cuota Gimnasio"
+                        value={newDebitName}
+                        onChange={(e) => setNewDebitName(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Cuenta de Origen para el Débito</label>
+                      <select
+                        required
+                        value={newDebitAccountId}
+                        onChange={(e) => setNewDebitAccountId(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                      >
+                        <option value="">-- Seleccionar Cuenta --</option>
+                        {accounts.map(acc => (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.nombre} (Saldo disponible: ${acc.saldo.toLocaleString('es-CO')})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Monto a Debitar ($)</label>
+                        <div className="relative">
+                          <span className="absolute left-3.5 top-2.5 text-slate-500 text-xs font-bold">$</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            required
+                            placeholder="Ej: 150.000"
+                            value={newDebitAmount}
+                            onChange={(e) => setNewDebitAmount(formatNumberMask(e.target.value))}
+                            className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 pl-8 pr-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 placeholder-slate-600 transition-all"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Día de Cobro (1-31)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="31"
+                          required
+                          value={newDebitDayOfMonth}
+                          onChange={(e) => setNewDebitDayOfMonth(e.target.value)}
+                          className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">Categoría del Egreso</label>
+                      <select
+                        value={newDebitCategory}
+                        onChange={(e) => setNewDebitCategory(e.target.value)}
+                        className="w-full bg-slate-950/40 border border-white/10 focus:border-emerald-500/40 rounded-xl py-2.5 px-3.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/20 transition-all"
+                      >
+                        {categories.expense.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-4 border-t border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddDebitModalOpen(false)}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={newDebitLoading}
+                        className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                      >
+                        {newDebitLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4 stroke-[3px]" />
+                        )}
+                        Guardar Débito
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+
+            {/* Modal de Tutorial / Guía de Inicio para Usuarios Nuevos */}
+            {isOnboardingModalOpen && (
+              <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col relative"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Encabezado con barra de progreso */}
+                  <div className="p-6 pb-4 border-b border-white/5 bg-slate-900/40 relative">
+                    <div className="flex justify-between items-center mb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                          <Compass className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h3 className="font-extrabold text-white text-base tracking-tight">
+                            Guía de Inicio Rápido
+                          </h3>
+                          <p className="text-xs text-slate-400">
+                            Paso {onboardingStep + 1} de 5 • Conoce tu plataforma contable
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleFinishOnboarding(true)}
+                        className="p-1.5 hover:bg-white/10 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer text-xs font-semibold flex items-center gap-1"
+                        title="Omitir Tutorial"
+                      >
+                        Omitir
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Barra de progreso */}
+                    <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-white/5">
+                      <div
+                        className="bg-emerald-400 h-full transition-all duration-300"
+                        style={{ width: `${((onboardingStep + 1) / 5) * 100}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  {/* CORTINAS / DIAPOSITIVAS DEL TUTORIAL */}
+                  <div className="p-6 min-h-[320px] flex flex-col justify-between">
+                    <AnimatePresence mode="wait">
+                      {onboardingStep === 0 && (
+                        <motion.div
+                          key="step-0"
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: -20 }}
+                          className="space-y-4"
+                        >
+                          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-black text-2xl border border-emerald-500/20">
+                            👋
+                          </div>
+                          <h4 className="text-lg font-black text-white">¡Bienvenido a ContabilidApp!</h4>
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            ContabilidApp es tu centro de control financiero inteligente. Aquí podrás llevar la contabilidad completa de tu dinero, presupuestos, ahorros, deudas y suscripciones de manera 100% privada y cifrada.
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                            <div className="p-3 bg-white/5 border border-white/5 rounded-xl text-xs space-y-1">
+                              <span className="font-bold text-emerald-400 flex items-center gap-1">
+                                <ShieldCheck className="w-3.5 h-3.5" />
+                                Cifrado AES-256 E2EE
+                              </span>
+                              <p className="text-[11px] text-slate-400">Tus cifras y saldos se cifran localmente con tu clave única.</p>
+                            </div>
+                            <div className="p-3 bg-white/5 border border-white/5 rounded-xl text-xs space-y-1">
+                              <span className="font-bold text-indigo-400 flex items-center gap-1">
+                                <Activity className="w-3.5 h-3.5" />
+                                Balance en Tiempo Real
+                              </span>
+                              <p className="text-[11px] text-slate-400">Sincronización instantánea con tu base de datos Firestore.</p>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {onboardingStep === 1 && (
+                        <motion.div
+                          key="step-1"
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: -20 }}
+                          className="space-y-4"
+                        >
+                          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-black text-2xl border border-emerald-500/20">
+                            💳
+                          </div>
+                          <h4 className="text-lg font-black text-white">1. Cuentas y Débitos Automáticos</h4>
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            Crea tus cuentas monetarias de activo (Bancos, Efectivo, Tarjetas) o de pasivo (Deudas/Préstamos).
+                          </p>
+                          <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-xl text-xs space-y-1 text-slate-200">
+                            <span className="font-bold text-yellow-400 flex items-center gap-1">
+                              <Zap className="w-3.5 h-3.5" />
+                              Alertas de Saldo en Débitos
+                            </span>
+                            <p className="text-[11px] text-slate-300">
+                              Configura pagos automáticos mensuales (Servicios, Netflix, Arriendo). Si una cuenta no tiene saldo suficiente en la fecha programada, el sistema te enviará una notificación emergente nativa a tu navegador.
+                            </p>
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {onboardingStep === 2 && (
+                        <motion.div
+                          key="step-2"
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: -20 }}
+                          className="space-y-4"
+                        >
+                          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-black text-2xl border border-emerald-500/20">
+                            📈
+                          </div>
+                          <h4 className="text-lg font-black text-white">2. Control de Presupuestos y Alertas</h4>
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            Establece techos de gasto por categoría para evitar sobrecostos mensuales.
+                          </p>
+                          <ul className="space-y-2 text-xs text-slate-300">
+                            <li className="flex items-center gap-2">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <span>Monitorea tu progreso con barras de estado de color.</span>
+                            </li>
+                            <li className="flex items-center gap-2">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <span>Recibe notificaciones del dispositivo al alcanzar el 80% o 100% de tu límite.</span>
+                            </li>
+                          </ul>
+                        </motion.div>
+                      )}
+
+                      {onboardingStep === 3 && (
+                        <motion.div
+                          key="step-3"
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: -20 }}
+                          className="space-y-4"
+                        >
+                          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-black text-2xl border border-emerald-500/20">
+                            💰
+                          </div>
+                          <h4 className="text-lg font-black text-white">3. Metas de Ahorro y Deudas</h4>
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            Organiza tus objetivos a largo plazo y gestiona el pago de pasivos de forma estratégica.
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="p-3 bg-white/5 border border-white/5 rounded-xl text-xs space-y-1">
+                              <span className="font-bold text-emerald-400">Metas de Ahorro</span>
+                              <p className="text-[11px] text-slate-400">Registra aportes y mira el indicador de porcentaje hacia tu objetivo.</p>
+                            </div>
+                            <div className="p-3 bg-white/5 border border-white/5 rounded-xl text-xs space-y-1">
+                              <span className="font-bold text-rose-400">Control de Deudas</span>
+                              <p className="text-[11px] text-slate-400">Lleva el control de pagos mínimos, cuotas pendientes y fechas de vencimiento.</p>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {onboardingStep === 4 && (
+                        <motion.div
+                          key="step-4"
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: -20 }}
+                          className="space-y-4"
+                        >
+                          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-black text-2xl border border-emerald-500/20">
+                            📄
+                          </div>
+                          <h4 className="text-lg font-black text-white">4. Manual de Usuario en PDF</h4>
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            ¿Necesitas una guía detallada para imprimir o consultar sin conexión? En la pestaña de <strong>Configuración</strong> encontrarás el <strong>Manual de Usuario en PDF</strong> interactivo, listo para visualizar o descargar en cualquier momento.
+                          </p>
+                          <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300">
+                            🎉 ¡Todo listo para tomar el control de tu contabilidad!
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {/* BOTONES DE NAVEGACIÓN */}
+                    <div className="flex items-center justify-between pt-6 border-t border-white/5 mt-4">
+                      <button
+                        type="button"
+                        disabled={onboardingStep === 0}
+                        onClick={() => setOnboardingStep(s => Math.max(0, s - 1))}
+                        className="px-4 py-2 bg-white/5 hover:bg-white/10 disabled:opacity-30 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                        Anterior
+                      </button>
+
+                      <div className="flex items-center gap-1.5">
+                        {[0, 1, 2, 3, 4].map(idx => (
+                          <button
+                            key={idx}
+                            onClick={() => setOnboardingStep(idx)}
+                            className={`w-2.5 h-2.5 rounded-full transition-all cursor-pointer ${
+                              onboardingStep === idx ? 'bg-emerald-400 w-6' : 'bg-white/20 hover:bg-white/40'
+                            }`}
+                          />
+                        ))}
+                      </div>
+
+                      {onboardingStep < 4 ? (
+                        <button
+                          type="button"
+                          onClick={() => setOnboardingStep(s => Math.min(4, s + 1))}
+                          className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md shadow-emerald-500/10 flex items-center gap-1"
+                        >
+                          Siguiente
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleFinishOnboarding(true)}
+                          className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-black transition-all cursor-pointer shadow-lg shadow-emerald-500/20 flex items-center gap-1.5"
+                        >
+                          <CheckCircle2 className="w-4 h-4 stroke-[3px]" />
+                          ¡Empezar Ahora!
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </motion.div>
               </div>
             )}
